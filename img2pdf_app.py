@@ -81,8 +81,11 @@ except Exception:
     _HAS_TURBO = False
 
 VERSION = "1.0"
-# アップデートチェック用URL。配布時に実際のURLへ変更すること。
-# None を設定するとアップデートチェックをスキップする。
+# ── アップデートチェック用 URL ──────────────────────────────────
+# 配布時に実際の URL へ変更してください。
+# 例) UPDATE_URL = "https://example.com/app/version.json"
+# None のままだとアップデートチェック機能は無効です。
+# build.py のコメント参照。
 UPDATE_URL = None
 SUPPORTED_EXTS = ('.jpg', '.jpeg', '.avif', '.webp', '.png', '.bmp', '.gif', '.tiff', '.tif')
 

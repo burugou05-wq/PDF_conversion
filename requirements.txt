@@ -1,0 +1,20 @@
+# 画像→PDF 変換ツール v1.0
+# 必須ライブラリ
+
+# UI
+tkinterdnd2>=0.3.0
+
+# 画像処理
+Pillow>=9.0.0
+pillow-avif-plugin>=1.0.0
+pillow-heif>=0.7.0
+
+# PDF生成
+img2pdf>=0.4.4
+
+# JPEG高速化（オプション：ない場合は PIL フォールバック使用）
+PyTurboJPEG>=1.7.0
+numpy>=1.20.0
+
+# ビルドツール
+PyInstaller>=5.0.0
