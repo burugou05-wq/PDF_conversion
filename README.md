@@ -9,13 +9,37 @@
 
 ### EXEのビルド手順
 1. このフォルダを任意の場所に展開する
-2. `build_exe.bat` をダブルクリック
-3. 自動でライブラリのインストール＆ビルドが実行される
-4. `dist\画像PDF変換.exe` が完成 → 好きな場所にコピーしてOK
+2. PowerShell を開く（フォルダ内で右クリック → PowerShell で開く）
+3. `python build.py` を実行
+4. 自動でライブラリのインストール＆ビルドが実行される
+5. `dist\画像PDF変換ツール.exe` が完成 → 好きな場所にコピーしてOK
+
+**注意**: `build_exe.bat` は古いため使用しないでください。`build.py` をご使用ください。
 
 ---
 
-## ソフトの使い方
+## 開発者向け情報
+
+### 依存関係
+`requirements.txt` に記載されています。手動インストール時は以下を実行：
+```
+pip install -r requirements.txt
+```
+
+### UPDATE_URL の設定（配布時）
+`img2pdf_app.py` の以下の行を変更してください：
+```python
+UPDATE_URL = "https://example.com/version.json"  # 実際の URL に置き換える
+```
+
+version.json の形式例：
+```json
+{
+  "version": "1.1",
+  "url": "https://example.com/download/1.1",
+  "release_notes": "新機能追加"
+}
+```
 
 1. `画像PDF変換.exe` を起動
 2. **「参照…」** ボタンで画像が入ったフォルダを選ぶ
