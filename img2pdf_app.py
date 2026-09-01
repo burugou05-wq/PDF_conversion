@@ -646,7 +646,7 @@ class OptionsPanel(ttk.Frame):
         def _on_custom_edit(*_):
             if self.margin_custom.get().strip():
                 self.margin_var.set("")   # ラジオをどれも選択なし状態に
-        self.margin_custom.trace("w", _on_custom_edit)
+        self.margin_custom.trace_variable("write", _on_custom_edit)
 
         # ── 背景色 ────────────────────────────────────────────────
         bf = ttk.LabelFrame(self._panel, text="背景色（透過画像用）", style="Surface.TLabelframe", padding=(10,4))
@@ -771,7 +771,7 @@ class ManualTab(ttk.Frame):
         sf = ttk.Frame(self, style="Surface.TFrame")
         sf.pack(fill="x", padx=8, pady=2)
         ttk.Label(sf, text="🔍", style="Surface.TLabel").pack(side="left")
-        self._search_var.trace("w", lambda *_: self._refresh())
+        self._search_var.trace_variable("write", lambda *_: self._refresh())
         ttk.Entry(sf, textvariable=self._search_var).pack(side="left", fill="x", expand=True, padx=4)
         ttk.Button(sf, text="✕", width=3,
                    command=lambda: self._search_var.set("")).pack(side="left")
