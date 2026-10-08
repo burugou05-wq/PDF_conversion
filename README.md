@@ -6,7 +6,7 @@ Windows向けデスクトップアプリです。手動選択・フォルダ一�
 
 ## EXEのダウンロード（一般ユーザー向け）
 
-[GitHub Releases](https://github.com/burugou05-wq/PDF_conversion/releases/tag/v2.0.0) の「Assets」から 画像PDF変換ツール.exe をダウンロードして起動してください。Pythonのインストールやビルドは不要です。
+[GitHub Releases](https://github.com/burugou05-wq/PDF_conversion/releases/tag/v2.0.0) の「Assets」から ImageToPDF-v2.0.0-Windows-x64.exe をダウンロードして起動してください。Pythonのインストールやビルドは不要です。
 
 旧版から更新する場合は、旧版を終了してから新しいEXEに置き換えてください。コード署名はありません。警告が出た場合は入手元を確認し、セキュリティソフトが危険と判定したファイルは実行しないでください。検証状況と制限は [更新履歴](CHANGELOG.md) をご確認ください。
 

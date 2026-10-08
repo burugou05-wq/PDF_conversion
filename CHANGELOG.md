@@ -6,7 +6,7 @@
 
 Windows 10 / 11（64bit）向けのEXEを [GitHub Releases](https://github.com/burugou05-wq/PDF_conversion/releases/tag/v2.0.0) から配布します。
 
-1. リリースページの「Assets」から `画像PDF変換ツール.exe` をダウンロードしてください。
+1. リリースページの「Assets」から `ImageToPDF-v2.0.0-Windows-x64.exe` をダウンロードしてください。
 2. ダウンロードしたEXEをダブルクリックすると起動します。Pythonのインストールやビルド操作は不要です。
 3. 旧版から更新する場合は、旧版を終了してから新しいEXEに置き換えてください。アプリ内での自動更新はありません。
 
