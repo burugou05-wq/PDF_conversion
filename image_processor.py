@@ -1,300 +1,277 @@
-"""
-image_processor.py - 画像処理と PDF 変換ロジック
+"""Headless conversion with explicit PDF geometry and atomic output."""
 
-画像形式の判定、一時ファイル生成、マルチスレッド並列処理を担当。
-"""
-
+import errno
+import logging
+import math
 import os
-import sys
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import multiprocessing
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 
-from PIL import Image
+import img2pdf
+from PIL import Image, ImageOps
+from pypdf import PdfWriter
 
-# DPI対応・ライブラリ検出コード（img2pdf_app.py から移植）
-try:
-    from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_444
-    _HAS_TURBO = True
-    _turbo = TurboJPEG()
-except Exception:
-    _HAS_TURBO = False
+LOGGER = logging.getLogger(__name__)
+PAGE_SIZES_MM = {"A4": (210.0, 297.0), "A3": (297.0, 420.0), "Letter": (215.9, 279.4)}
+DEFAULT_DPI = 96.0
+MM_TO_PT = 72.0 / 25.4
 
-try:
-    import img2pdf as _img2pdf
-    _HAS_IMG2PDF = True
-except Exception:
-    _HAS_IMG2PDF = False
 
-# 画像形式定義
-IMG2PDF_NATIVE = frozenset({'.jpg', '.jpeg', '.png'})
-NEED_CONVERT = frozenset({'.avif', '.heif', '.heic', '.webp', '.bmp', '.gif', '.tiff', '.tif'})
+def register_image_plugins():
+    try:
+        import pillow_avif  # noqa: F401
+    except ImportError:
+        LOGGER.debug("AVIF plugin not installed")
+    try:
+        from pillow_heif import register_heif_opener
 
-PAGE_SIZES_MM = {
-    "A4":     (210.0, 297.0),
-    "A3":     (297.0, 420.0),
-    "Letter": (215.9, 279.4),
-}
+        register_heif_opener()
+    except ImportError:
+        LOGGER.debug("HEIF plugin not installed")
 
-def mm_to_px(mm: float, dpi: float) -> int:
-    """mm をピクセルに変換"""
-    return max(1, int(mm / 25.4 * dpi))
 
-def open_as_rgb(path: str, bg_color=(255, 255, 255)) -> Image.Image:
-    """
-    PIL で画像を開き RGB に変換。
-    透過画像はbg_color で背景合成。
-    """
-    img = Image.open(path)
-    has_alpha = img.mode in ("RGBA", "LA") or (
-        img.mode == "P" and "transparency" in img.info
+register_image_plugins()
+
+
+class ConversionCancelled(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class ConversionOptions:
+    quality: str = "original"
+    page_size: str | None = None
+    margin_mm: float = 0.0
+    bg_color: tuple = (255, 255, 255)
+    auto_rotate: bool = True
+    compact_dpi: int = 150
+    jpeg_quality: int = 85
+
+    def validate(self):
+        if self.quality not in {"original", "compact"}:
+            raise ValueError("画質モードが不正です")
+        if self.page_size is not None and self.page_size not in PAGE_SIZES_MM:
+            raise ValueError("用紙サイズが不正です")
+        if not math.isfinite(self.margin_mm) or not 0 <= self.margin_mm <= 100:
+            raise ValueError("余白は0〜100mmで指定してください")
+        if self.page_size and self.margin_mm * 2 >= min(PAGE_SIZES_MM[self.page_size]):
+            raise ValueError("余白が用紙サイズを超えています")
+        if len(self.bg_color) != 3 or any(
+            not isinstance(value, int) or not 0 <= value <= 255 for value in self.bg_color
+        ):
+            raise ValueError("背景色が不正です")
+        if not 36 <= self.compact_dpi <= 600 or not 1 <= self.jpeg_quality <= 100:
+            raise ValueError("圧縮設定が不正です")
+
+
+@dataclass(frozen=True)
+class SkippedFile:
+    path: Path
+    reason: str
+
+
+@dataclass(frozen=True)
+class ConversionResult:
+    output_path: Path
+    page_count: int
+    skipped: tuple
+
+
+def check_cancel(cancel_event):
+    if cancel_event is not None and cancel_event.is_set():
+        raise ConversionCancelled("変換をキャンセルしました")
+
+
+def normalize_dpi(value):
+    try:
+        horizontal, vertical = map(float, value)
+        if all(math.isfinite(item) and 1 <= item <= 10000 for item in (horizontal, vertical)):
+            return horizontal, vertical
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return DEFAULT_DPI, DEFAULT_DPI
+
+
+def page_geometry(width, height, dpi, options):
+    """Return page and image sizes in points, independently of pixel resolution."""
+    horizontal, vertical = normalize_dpi(dpi)
+    image_width = width * 72.0 / horizontal
+    image_height = height * 72.0 / vertical
+    margin = options.margin_mm * MM_TO_PT
+    if options.page_size is None:
+        return image_width + margin * 2, image_height + margin * 2, image_width, image_height
+    page_width, page_height = (value * MM_TO_PT for value in PAGE_SIZES_MM[options.page_size])
+    if options.auto_rotate and (image_width > image_height) != (page_width > page_height):
+        page_width, page_height = page_height, page_width
+    scale = min(
+        1.0, (page_width - margin * 2) / image_width, (page_height - margin * 2) / image_height
     )
-    if has_alpha:
-        bg = Image.new("RGB", img.size, bg_color)
-        rgba = img.convert("RGBA")
-        bg.paste(rgba, mask=rgba.split()[3])
-        return bg
-    return img.convert("RGB")
+    return page_width, page_height, image_width * scale, image_height * scale
 
-def make_tmp_png(img: Image.Image, tmp_files: list, dpi=None) -> str:
-    """PIL Image を一時 PNG に書き出す。compress_level=1 で高速化"""
-    import tempfile
-    t = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-    t.close()
-    save_kwargs = dict(format='PNG', compress_level=1)
-    if dpi:
-        save_kwargs['dpi'] = (int(round(dpi[0])), int(round(dpi[1])))
-    img.save(t.name, **save_kwargs)
-    tmp_files.append(t.name)
-    return t.name
 
-def make_tmp_jpg(img: Image.Image, tmp_files: list, quality: int = 95, dpi=None) -> str:
-    """
-    PIL Image を一時 JPEG に書き出す。
-    TurboJPEG が使える場合は使用（3-5倍高速）。
-    """
-    import tempfile
-    import numpy as np
-    
-    t = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
-    t.close()
-    
-    if _HAS_TURBO and dpi is None:
-        arr = np.asarray(img.convert("RGB"), dtype=np.uint8)
-        jpg_bytes = _turbo.encode(arr, quality=quality,
-                                  pixel_format=TJPF_RGB,
-                                  jpeg_subsample=TJSAMP_444)
-        with open(t.name, 'wb') as f:
-            f.write(jpg_bytes)
-    else:
-        save_kwargs = dict(format='JPEG', quality=quality, subsampling=0)
-        if dpi:
-            save_kwargs['dpi'] = (int(round(dpi[0])), int(round(dpi[1])))
-        img.save(t.name, **save_kwargs)
-    
-    tmp_files.append(t.name)
-    return t.name
-
-def is_lossless_webp(path: str) -> bool:
-    """WebP がロスレスか判定（ヘッダー読み込み）"""
+def flatten_image(image, color):
+    rgba = image.convert("RGBA")
+    background = Image.new("RGBA", rgba.size, (*color, 255))
     try:
-        with open(path, "rb") as f:
-            header = f.read(16)
-        return len(header) >= 16 and header[8:12] == b'WEBP' and header[12:16] == b'VP8L'
-    except Exception:
-        return False
-
-def apply_layout(img: Image.Image, page_size_mm, margin_mm: float,
-                 bg_color=(255, 255, 255), src_dpi=None) -> Image.Image:
-    """
-    ページサイズ・余白に合わせてレイアウトを適用。
-    - 縮小のみ（拡大なし）
-    - 横長画像は用紙を自動回転
-    """
-    if page_size_mm is None and margin_mm == 0:
-        return img
-
-    orig_w, orig_h = img.size
-
-    if page_size_mm is not None:
-        pw_mm, ph_mm = page_size_mm
-        img_landscape = orig_w > orig_h
-        page_landscape = pw_mm > ph_mm
-        
-        if img_landscape != page_landscape:
-            pw_mm, ph_mm = ph_mm, pw_mm  # 用紙を回転
-
-        inner_w_mm = max(1.0, pw_mm - margin_mm * 2)
-        inner_h_mm = max(1.0, ph_mm - margin_mm * 2)
-        
-        long_px = max(orig_w, orig_h)
-        long_mm = max(pw_mm, ph_mm)
-        dpi_est = long_px / (long_mm / 25.4)
-        
-        page_w_px = mm_to_px(pw_mm, dpi_est)
-        page_h_px = mm_to_px(ph_mm, dpi_est)
-        inner_w_px = mm_to_px(inner_w_mm, dpi_est)
-        inner_h_px = mm_to_px(inner_h_mm, dpi_est)
-        
-        scale = min(1.0, inner_w_px / orig_w, inner_h_px / orig_h)
-        fit_w = max(1, int(orig_w * scale))
-        fit_h = max(1, int(orig_h * scale))
-        
-        img = img.resize((fit_w, fit_h), Image.LANCZOS)
-        canvas = Image.new("RGB", (page_w_px, page_h_px), bg_color)
-        ox = (page_w_px - img.width) // 2
-        oy = (page_h_px - img.height) // 2
-        canvas.paste(img, (ox, oy))
-        return canvas
-    else:
-        ref_dpi = src_dpi[0] if src_dpi else 96
-        margin_px = mm_to_px(margin_mm, ref_dpi)
-        nw = orig_w + margin_px * 2
-        nh = orig_h + margin_px * 2
-        canvas = Image.new("RGB", (nw, nh), bg_color)
-        canvas.paste(img, (margin_px, margin_px))
-        return canvas
-
-def convert_to_pdf(image_paths, output_path, progress_cb=None,
-                   quality="lossless", page_size=None, margin_mm=0,
-                   bg_color=(255, 255, 255)):
-    """
-    複数画像を PDF に変換（マルチスレッド並列処理）。
-    
-    Args:
-        image_paths: 画像パスのリスト
-        output_path: 出力 PDF パス
-        progress_cb: 進捗コールバック（0-100）
-        quality: "lossless" | "standard"
-        page_size: None | "A4" | "A3" | "Letter"
-        margin_mm: 余白（mm）
-        bg_color: RGB tuple
-    
-    Returns:
-        スキップされたファイル名のリスト
-    """
-    if not _HAS_IMG2PDF:
-        raise RuntimeError(
-            "PDF変換エンジンの読み込みに失敗しました。\n"
-            "img2pdf ライブラリをインストール下さい。")
-
-    skipped = []
-    tmp_files = []
-    tmp_lock = threading.Lock()
-    total = len(image_paths)
-
-    page_size_mm = PAGE_SIZES_MM.get(page_size) if page_size else None
-    needs_layout = (page_size_mm is not None) or (margin_mm > 0)
-    q_high = 95
-    q_std = 85
-
-    def _reg(path):
-        with tmp_lock:
-            tmp_files.append(path)
-        return path
-
-    def process_one(args):
-        i, path = args
+        composited = Image.alpha_composite(background, rgba)
         try:
-            ext = os.path.splitext(path)[1].lower()
-            q = q_high if quality == "lossless" else q_std
-
-            if not needs_layout:
-                if ext in IMG2PDF_NATIVE:
-                    return i, path
-
-                elif ext in NEED_CONVERT:
-                    img = Image.open(path)
-                    src_dpi = img.info.get("dpi")
-
-                    if ext in ('.tiff', '.tif') and getattr(img, 'n_frames', 1) > 1:
-                        return i, path
-
-                    has_alpha = img.mode in ("RGBA", "LA") or (
-                        img.mode == "P" and "transparency" in img.info
-                    )
-
-                    if ext == '.webp':
-                        if is_lossless_webp(path) and not has_alpha:
-                            return i, _reg(make_tmp_png(img.convert("RGB"), tmp_files, dpi=src_dpi))
-                        elif not has_alpha:
-                            return i, _reg(make_tmp_jpg(img.convert("RGB"), tmp_files, q, dpi=src_dpi))
-
-                    if has_alpha:
-                        return i, _reg(make_tmp_png(open_as_rgb(path, bg_color), tmp_files, dpi=src_dpi))
-                    else:
-                        return i, _reg(make_tmp_jpg(img.convert("RGB"), tmp_files, q, dpi=src_dpi))
-                else:
-                    img = Image.open(path)
-                    src_dpi = img.info.get("dpi")
-                    return i, _reg(make_tmp_png(open_as_rgb(path, bg_color), tmp_files, dpi=src_dpi))
-
-            else:
-                img = Image.open(path)
-                src_dpi = img.info.get("dpi")
-                img = open_as_rgb(path, bg_color)
-                img = apply_layout(img, page_size_mm, margin_mm, bg_color, src_dpi=src_dpi)
-                return i, _reg(make_tmp_jpg(img, tmp_files, q))
-
-        except Exception:
-            return i, None
-
-    workers = min(total, max(2, multiprocessing.cpu_count()))
-    results = [None] * total
-
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(process_one, (i, p)): i for i, p in enumerate(image_paths)}
-        done = 0
-        for fut in as_completed(futures):
-            i, embed_path = fut.result()
-            if embed_path is None:
-                skipped.append(os.path.basename(image_paths[i]))
-            else:
-                results[i] = embed_path
-            done += 1
-            if progress_cb:
-                progress_cb(int(done / total * 88))
-
-    embed_paths = [p for p in results if p is not None]
-
-    if not embed_paths:
-        raise ValueError(
-            "変換できる画像がありません\n"
-            "スキップ: " + ", ".join(skipped[:5]))
-
-    try:
-        _lib = sys.modules.get("img2pdf") or _img2pdf
-        pdf_bytes = _lib.convert(embed_paths)
-        if progress_cb:
-            progress_cb(96)
-
-        with open(output_path, "wb") as f:
-            f.write(pdf_bytes)
-
-        if progress_cb:
-            progress_cb(100)
-        
-        return skipped
-
+            return composited.convert("RGB")
+        finally:
+            composited.close()
     finally:
-        for t in tmp_files:
-            try:
-                os.unlink(t)
-            except OSError:
-                pass
+        rgba.close()
+        background.close()
 
-def make_thumbnail(path, size=(160, 120)):
-    """画像のサムネイルを生成"""
+
+def make_thumbnail(path, size=(240, 200)):
+    """Return a PIL image; only the UI thread creates Tk objects."""
+    with Image.open(path) as source:
+        oriented = ImageOps.exif_transpose(source)
+        try:
+            thumbnail = flatten_image(oriented, (245, 245, 245))
+            thumbnail.thumbnail(size, Image.Resampling.LANCZOS)
+            return thumbnail
+        finally:
+            oriented.close()
+
+
+def _convert_file(path, directory, options, cancel_event):
+    embedded = []
+    geometry = []
+    with Image.open(path) as source:
+        frame_count = getattr(source, "n_frames", 1)
+        for frame_index in range(frame_count):
+            check_cancel(cancel_event)
+            source.seek(frame_index)
+            source.load()
+            dpi = normalize_dpi(source.info.get("dpi"))
+            orientation = source.getexif().get(274, 1)
+            image = ImageOps.exif_transpose(source)
+            try:
+                if orientation in {5, 6, 7, 8}:
+                    dpi = dpi[::-1]
+                layout = page_geometry(*image.size, dpi, options)
+                geometry.append(layout)
+                has_alpha = image.mode in {"RGBA", "LA", "PA"} or "transparency" in image.info
+                native = (
+                    frame_count == 1
+                    and source.format in {"JPEG", "PNG"}
+                    and orientation == 1
+                    and not has_alpha
+                    and options.quality == "original"
+                )
+                if native:
+                    embedded.append(str(path))
+                    continue
+                frame_path = directory / f"frame-{frame_index}.png"
+                rgb = flatten_image(image, options.bg_color)
+                try:
+                    if options.quality == "compact":
+                        frame_path = frame_path.with_suffix(".jpg")
+                        maximum = (
+                            max(1, round(layout[2] / 72 * options.compact_dpi)),
+                            max(1, round(layout[3] / 72 * options.compact_dpi)),
+                        )
+                        rgb.thumbnail(maximum, Image.Resampling.LANCZOS)
+                        rgb.save(frame_path, "JPEG", quality=options.jpeg_quality, subsampling=0)
+                    else:
+                        rgb.save(frame_path, "PNG", compress_level=3)
+                    embedded.append(str(frame_path))
+                finally:
+                    rgb.close()
+            finally:
+                image.close()
+    check_cancel(cancel_event)
+    layouts = iter(geometry)
+    pdf_path = directory / "image.pdf"
+    with pdf_path.open("wb") as output:
+        img2pdf.convert(embedded, layout_fun=lambda *args: next(layouts), outputstream=output)
+    return pdf_path
+
+
+def convert_to_pdf(
+    image_paths, output_path, progress_cb=None, *, options=None, cancel_event=None, overwrite=False
+):
+    """Sequential preprocessing bounds decoded-image memory.
+
+    Invalid files are skipped as a whole. Cancellation and resource failures
+    abort before publishing output. The PDF merger still retains PDF objects.
+    """
+    options = options or ConversionOptions()
+    options.validate()
+    paths = [Path(path).expanduser().resolve() for path in image_paths]
+    output = Path(output_path).expanduser().resolve()
+    if not paths:
+        raise ValueError("画像を追加してください")
+    if output.suffix.lower() != ".pdf":
+        raise ValueError("出力ファイルの拡張子は.pdfにしてください")
+    if output in paths:
+        raise ValueError("入力ファイルと出力先が同じです")
+    if not output.parent.is_dir():
+        raise ValueError("出力先フォルダが存在しません")
+    if output.exists() and not overwrite:
+        raise FileExistsError(f"出力ファイルが存在します: {output}")
+    skipped = []
+    writer = PdfWriter()
+    staging = None
     try:
-        from PIL import ImageTk
-        img = Image.open(path)
-        img.thumbnail(size, Image.LANCZOS)
-        bg = Image.new("RGB", size, (245, 245, 245))
-        offset = ((size[0] - img.width) // 2, (size[1] - img.height) // 2)
-        if img.mode in ("RGBA", "LA", "P"):
-            bg.paste(img, offset, img.convert("RGBA").split()[3])
-        else:
-            bg.paste(img.convert("RGB"), offset)
-        return ImageTk.PhotoImage(bg)
-    except Exception:
-        return None
+        with tempfile.TemporaryDirectory(prefix="img2pdf-") as temporary:
+            for index, path in enumerate(paths):
+                check_cancel(cancel_event)
+                directory = Path(temporary) / str(index)
+                directory.mkdir()
+                try:
+                    pdf_path = _convert_file(path, directory, options, cancel_event)
+                except (ConversionCancelled, MemoryError):
+                    raise
+                except Exception as error:
+                    # Resource failures are not recoverable by skipping an image.
+                    if isinstance(error, OSError) and error.errno in {
+                        errno.ENOSPC,
+                        errno.EACCES,
+                        errno.EPERM,
+                        errno.EROFS,
+                        errno.EMFILE,
+                        errno.ENFILE,
+                        errno.EIO,
+                    }:
+                        raise
+                    LOGGER.warning("Skipped %s", path, exc_info=True)
+                    skipped.append(SkippedFile(path, str(error) or type(error).__name__))
+                else:
+                    writer.append(str(pdf_path), import_outline=False)
+                if progress_cb:
+                    progress_cb(round((index + 1) / len(paths) * 90))
+            if not writer.pages:
+                details = "\n".join(f"{item.path.name}: {item.reason}" for item in skipped[:5])
+                raise ValueError("変換できる画像がありません\n" + details)
+            check_cancel(cancel_event)
+            writer.add_metadata({"/Producer": "Image to PDF 2.0"})
+            descriptor, name = tempfile.mkstemp(
+                prefix=".img2pdf-", suffix=".tmp", dir=output.parent
+            )
+            staging = Path(name)
+            with os.fdopen(descriptor, "wb") as stream:
+                writer.write(stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            check_cancel(cancel_event)
+            if overwrite:
+                os.replace(staging, output)
+            else:
+                # Publishing with a hard link prevents concurrent overwrite.
+                os.link(staging, output)
+                staging.unlink()
+            staging = None
+            result = ConversionResult(output, len(writer.pages), tuple(skipped))
+        if progress_cb:
+            try:
+                progress_cb(100)
+            except Exception:
+                LOGGER.exception("Completion callback failed after successful save")
+        return result
+    finally:
+        writer.close()
+        if staging is not None:
+            staging.unlink(missing_ok=True)

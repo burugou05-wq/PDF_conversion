@@ -1,0 +1,4 @@
+# Additional formats and Windows drag-and-drop
+pillow-avif-plugin==1.5.0
+pillow-heif==0.21.0
+tkinterdnd2==0.4.3
