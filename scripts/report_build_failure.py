@@ -12,7 +12,7 @@ def main():
     if not log.is_file():
         return 0
     lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
-    detail = "\n".join(lines[-60:]).encode("ascii", "backslashreplace").decode("ascii")
+    detail = "\n".join(lines[-15:]).encode("ascii", "backslashreplace").decode("ascii")
     message = f"Windows build failed. Final log lines:\n{detail}"
     message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     print(f"::error title=Windows build failure::{message}")
