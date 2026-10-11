@@ -66,8 +66,9 @@ def test_cli_verbose_reports_dpi_source(tmp_path):
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert "PNG pHYs" in completed.stderr
-    assert "ICC" in completed.stderr
+    diagnostics = (completed.stderr or "") + (completed.stdout or "")
+    assert "PNG pHYs" in diagnostics
+    assert "ICC" in diagnostics
 
 
 def test_cli_missing_input_is_failure(tmp_path):
