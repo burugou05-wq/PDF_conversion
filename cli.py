@@ -10,12 +10,12 @@ from image_processor import DEFAULT_DPI, ConversionOptions, convert_to_pdf, insp
 
 
 def configure_console_encoding():
-    """Keep Japanese CLI diagnostics usable when Windows uses a legacy code page."""
+    """Avoid UnicodeEncodeError on legacy Windows consoles without changing their code page."""
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
             try:
-                reconfigure(encoding="utf-8", errors="replace")
+                reconfigure(errors="backslashreplace")
             except (OSError, ValueError):
                 pass
 

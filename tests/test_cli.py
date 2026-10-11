@@ -20,7 +20,7 @@ def test_cli_conversion(tmp_path):
     )
     assert completed.returncode == 0, completed.stderr
     assert len(PdfReader(output).pages) == 1
-    assert "ページ".encode("utf-8") in completed.stdout
+    assert b"output.pdf" in completed.stdout
 
 
 def test_cli_accepts_custom_default_dpi(tmp_path):
