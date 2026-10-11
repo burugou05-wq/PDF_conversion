@@ -65,7 +65,7 @@ def main():
                     print(
                         f"情報: {path.name}: {dpi.horizontal:g} × {dpi.vertical:g} DPI "
                         f"({dpi.source}); ICC {info.icc_profile}",
-                        file=sys.stderr,
+                        file=sys.stdout,
                     )
                 except Exception as error:
                     print(f"情報: {path.name}: DPI/ICCを読めません: {error}", file=sys.stderr)
