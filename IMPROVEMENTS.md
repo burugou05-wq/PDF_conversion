@@ -1,3 +1,12 @@
+# v2.0.1 ICC / DPI改善
+
+- 画像内のICCプロファイルを使い、再エンコードが必要な画像をsRGBへ色変換。中間PNG/JPEGにもsRGB ICCを埋め込み、`img2pdf` がPDFのICCBased色空間として出力する回帰テストを追加。
+- ICCのないDeviceRGB画像にもsRGB ICCBased色空間をPDF側で付与。JPEGの画像ストリームは元データのまま維持。
+- 不正なICCプロファイルは理由付きでスキップし、誤った色を黙って出力しない。
+- DPI値だけでなく取得元も返す `resolve_dpi` を追加。JPEGはEXIFのX/Y解像度を優先、TIFFはタグを優先し、PNG/JFIF等はPillowのDPI情報を使用。
+- DPIが取得できない場合の既定値を `ConversionOptions`・GUI・CLIで指定可能にし、プレビューとCLI verboseで値・出所・元寸法を表示。
+- ICC、プロファイル変換、DPIの単位・フォールバックを回帰テストに追加。
+
 # v2.0 再構築記録
 
 旧版の改善記録は実装と一致しなかったため、現在の構成に合わせて更新しました。

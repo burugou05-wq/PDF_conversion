@@ -58,9 +58,11 @@ def main():
         from PIL import ImageTk
 
         from image_processor import (
+            DEFAULT_DPI,
             ConversionCancelled,
             ConversionOptions,
             convert_to_pdf,
+            inspect_image,
             make_thumbnail,
         )
     except ImportError as error:
@@ -96,6 +98,7 @@ def main():
             self.closing = False
             self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="preview")
             self.preview_generation = 0
+            self.preview_path = None
             self.pending_thumbnails = set()
             self.thumbnail_cache = {}
             self.grid_page = 0
@@ -111,6 +114,7 @@ def main():
             self.quality = tk.StringVar(value="original")
             self.paper = tk.StringVar(value="元のサイズ")
             self.margin = tk.StringVar(value="0")
+            self.default_dpi = tk.StringVar(value=str(int(DEFAULT_DPI)))
             self.background = tk.StringVar(value="白")
             self.rotate = tk.BooleanVar(value=True)
             self.open_after = tk.BooleanVar(value=False)
@@ -120,6 +124,7 @@ def main():
             root.minsize(800, 640)
             self.build()
             self.query.trace_add("write", lambda *_: self.refresh())
+            self.default_dpi.trace_add("write", self.default_dpi_changed)
             root.protocol("WM_DELETE_WINDOW", self.close)
             root.after(80, self.poll)
 
@@ -243,7 +248,7 @@ def main():
             options = ttk.LabelFrame(root, text="変換設定", padding=8)
             options.pack(fill="x", padx=12, pady=6)
             for value, label in [
-                ("original", "元画質優先（再圧縮なし）"),
+                ("original", "元画質優先（可能なら元データを保持）"),
                 ("compact", "軽量化（150dpi / JPEG品質85）"),
             ]:
                 ttk.Radiobutton(options, text=label, variable=self.quality, value=value).pack(
@@ -272,6 +277,15 @@ def main():
                 side="left"
             )
             ttk.Checkbutton(settings, text="完了後に開く", variable=self.open_after).pack(
+                side="left"
+            )
+            dpi_settings = ttk.Frame(root, padding=(12, 3))
+            dpi_settings.pack(fill="x")
+            ttk.Label(dpi_settings, text="DPI不明時の既定値:").pack(side="left")
+            ttk.Entry(dpi_settings, textvariable=self.default_dpi, width=7).pack(
+                side="left", padx=4
+            )
+            ttk.Label(dpi_settings, text="dpi（1〜10000。取得元はプレビューに表示）", style="Sub.TLabel").pack(
                 side="left"
             )
             destination = ttk.Frame(root, padding=12)
@@ -442,16 +456,35 @@ def main():
             if selection:
                 self.show_preview(Path(selection[-1]))
 
+        def default_dpi_changed(self, *_):
+            if self.preview_path is not None and not self.closing:
+                self.show_preview(self.preview_path)
+
         def show_preview(self, path):
+            self.preview_path = Path(path)
             self.preview_generation += 1
             generation = self.preview_generation
+            try:
+                default_dpi = float(self.default_dpi.get())
+                if not 1 <= default_dpi <= 10000:
+                    raise ValueError
+                default_error = None
+            except ValueError:
+                default_dpi = DEFAULT_DPI
+                default_error = "DPI不明時の既定値は1〜10000で指定してください"
 
             def load():
+                image = None
+                info = None
+                error = None
                 try:
+                    info = inspect_image(path, default_dpi)
                     image = make_thumbnail(path, (215, 230))
-                    self.events.put(("preview", (generation, path, image, None)))
-                except Exception as error:
-                    self.events.put(("preview", (generation, path, None, str(error))))
+                except Exception as exception:
+                    error = str(exception)
+                self.events.put(
+                    ("preview", (generation, path, image, info, error, default_error))
+                )
 
             self.executor.submit(load)
 
@@ -552,6 +585,7 @@ def main():
                     margin_mm=float(self.margin.get()),
                     bg_color=colors[self.background.get()],
                     auto_rotate=self.rotate.get(),
+                    default_dpi=float(self.default_dpi.get()),
                 )
                 options.validate()
                 if not paths:
@@ -600,12 +634,35 @@ def main():
                         self.progress["value"] = payload
                         self.status.config(text=f"変換中… {payload}%")
                     elif kind == "preview":
-                        generation, path, image, error = payload
+                        generation, path, image, info, error, default_error = payload
                         if generation == self.preview_generation and not self.closing:
                             photo = ImageTk.PhotoImage(image, master=root) if image else None
                             self.preview.config(image=photo or "")
                             self.preview.image = photo
-                            self.preview_text.config(text=f"{path.name}\n{error or ''}")
+                            details = [path.name]
+                            if info:
+                                dpi = info.dpi
+                                width_mm = info.width / dpi.horizontal * 25.4
+                                height_mm = info.height / dpi.vertical * 25.4
+                                frames = (
+                                    f" / {info.frame_count}フレーム"
+                                    if info.frame_count > 1
+                                    else ""
+                                )
+                                details.extend(
+                                    [
+                                        f"{info.width}×{info.height}px{frames}",
+                                        f"DPI: {dpi.horizontal:g} × {dpi.vertical:g} "
+                                        f"({dpi.source})",
+                                        f"元寸法: {width_mm:.1f} × {height_mm:.1f} mm",
+                                        f"ICC: {info.icc_profile}",
+                                    ]
+                                )
+                            if default_error:
+                                details.append(default_error)
+                            if error:
+                                details.append(f"プレビュー: {error}")
+                            self.preview_text.config(text="\n".join(details))
                         if image:
                             image.close()
                     elif kind == "thumbnail":

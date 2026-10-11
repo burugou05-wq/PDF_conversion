@@ -2,6 +2,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from PIL import Image
 from pypdf import PdfReader
 
@@ -19,6 +20,53 @@ def test_cli_conversion(tmp_path):
     )
     assert completed.returncode == 0, completed.stderr
     assert len(PdfReader(output).pages) == 1
+
+
+def test_cli_accepts_custom_default_dpi(tmp_path):
+    source = tmp_path / "source.png"
+    with Image.new("RGB", (60, 90)) as image:
+        image.save(source)
+    output = tmp_path / "output.pdf"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(source),
+            "-o",
+            str(output),
+            "--default-dpi",
+            "300",
+        ],
+        capture_output=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    page = PdfReader(output).pages[0]
+    assert float(page.mediabox.width) == pytest.approx(60 / 300 * 72, abs=0.01)
+    assert float(page.mediabox.height) == pytest.approx(90 / 300 * 72, abs=0.01)
+
+
+def test_cli_verbose_reports_dpi_source(tmp_path):
+    source = tmp_path / "source.png"
+    with Image.new("RGB", (60, 90)) as image:
+        image.save(source, dpi=(300, 300))
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(source),
+            "-o",
+            str(tmp_path / "output.pdf"),
+            "--verbose",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "PNG pHYs" in completed.stderr
+    assert "ICC" in completed.stderr
 
 
 def test_cli_missing_input_is_failure(tmp_path):

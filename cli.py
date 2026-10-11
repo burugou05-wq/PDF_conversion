@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from file_model import FileModel
-from image_processor import ConversionOptions, convert_to_pdf
+from image_processor import DEFAULT_DPI, ConversionOptions, convert_to_pdf, inspect_image
 
 
 def main():
@@ -17,8 +17,17 @@ def main():
     parser.add_argument("--margin", type=float, default=0)
     parser.add_argument("--quality", choices=["original", "compact"], default="original")
     parser.add_argument("--background", choices=["white", "black", "gray"], default="white")
+    parser.add_argument(
+        "--default-dpi",
+        type=float,
+        default=DEFAULT_DPI,
+        help="DPI情報がない画像に使う既定値 (default: 96)",
+    )
     parser.add_argument("--no-auto-rotate", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--verbose", action="store_true", help="各画像のDPI取得元とICC情報を表示"
+    )
     arguments = parser.parse_args()
     logging.basicConfig(level=logging.WARNING)
     try:
@@ -34,7 +43,20 @@ def main():
             margin_mm=arguments.margin,
             bg_color=colors[arguments.background],
             auto_rotate=not arguments.no_auto_rotate,
+            default_dpi=arguments.default_dpi,
         )
+        if arguments.verbose:
+            for path in model.paths:
+                try:
+                    info = inspect_image(path, options.default_dpi)
+                    dpi = info.dpi
+                    print(
+                        f"情報: {path.name}: {dpi.horizontal:g} × {dpi.vertical:g} DPI "
+                        f"({dpi.source}); ICC {info.icc_profile}",
+                        file=sys.stderr,
+                    )
+                except Exception as error:
+                    print(f"情報: {path.name}: DPI/ICCを読めません: {error}", file=sys.stderr)
         result = convert_to_pdf(
             model.paths, arguments.output, options=options, overwrite=arguments.overwrite
         )

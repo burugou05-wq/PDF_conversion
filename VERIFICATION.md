@@ -1,4 +1,14 @@
-# v2.0 検証結果
+# v2.0.1 検証結果
+
+## ICC / DPI追加検証
+
+- `python -m pytest -q`: **67 passed, 2 skipped**（Python 3.11 / Linux、Tk display tests skipped）
+- `python -m ruff check .`: **All checks passed**
+- PDF内のICCBased色空間、sRGBへの実色変換、壊れたICCのスキップを回帰テスト
+- PNG pHYs、JPEG EXIFの異なるX/Y解像度と単位変換、DPI既定値を回帰テスト
+- Windows GUI / EXEのビルド・表示確認はCI実行後に追記します。
+
+# v2.0 検証結果（過去のリリース）
 
 ## 実行環境
 
