@@ -15,8 +15,10 @@ def main():
     try:
         root = ET.parse(report).getroot()
     except ET.ParseError as error:
-        print(f"Could not read pytest report: {error}", file=sys.stderr)
-        return 1
+        message = f"Could not read pytest report: {error}"
+        message = message.encode("ascii", "backslashreplace").decode("ascii")
+        print(f"::error title=pytest report parse failure::{message}")
+        return 0
 
     for case in root.iter("testcase"):
         failure = case.find("failure")
@@ -26,6 +28,7 @@ def main():
             continue
         detail = " ".join((failure.get("message", "") + " " + (failure.text or "")).split())
         message = f"{case.get('classname', '')}::{case.get('name', '')}: {detail}"[:3000]
+        message = message.encode("ascii", "backslashreplace").decode("ascii")
         message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
         print(f"::error title=pytest failure::{message}")
     return 0
