@@ -81,7 +81,14 @@ def main():
 
         root = TkinterDnD.Tk()
         has_dnd = True
-    except (ImportError, tk.TclError):
+    except (ImportError, tk.TclError, RuntimeError) as error:
+        logging.warning("Drag-and-drop unavailable; using file dialog: %s", error)
+        partial_root = getattr(tk, "_default_root", None)
+        if partial_root is not None:
+            try:
+                partial_root.destroy()
+            except tk.TclError:
+                pass
         root = tk.Tk()
         has_dnd = False
 
