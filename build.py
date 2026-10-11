@@ -51,7 +51,8 @@ def main():
     executable = HERE / "dist" / f"{APP_NAME}.exe"
     if not executable.is_file():
         raise RuntimeError("ビルド結果が見つかりません")
-    print(f"Completed: {executable}")
+    display_path = str(executable).encode("ascii", "backslashreplace").decode("ascii")
+    print(f"Completed: {display_path}")
     return 0
 
 
