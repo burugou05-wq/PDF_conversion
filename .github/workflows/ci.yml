@@ -26,7 +26,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python build.py
+      - name: Build EXE
+        run: |
+          python build.py 2>&1 | Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Annotate build failure
+        if: failure()
+        run: python scripts/report_build_failure.py build.log
       - uses: actions/upload-artifact@v4
         with:
           name: ImageToPDF-Windows
