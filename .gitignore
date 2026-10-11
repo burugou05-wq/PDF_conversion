@@ -7,3 +7,4 @@ build/
 build_tmp/
 dist/
 *.log
+pytest-results.xml
