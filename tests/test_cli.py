@@ -67,7 +67,7 @@ def test_cli_verbose_reports_dpi_source(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     diagnostics = (completed.stderr or "") + (completed.stdout or "")
-    assert "PNG pHYs" in diagnostics
+    assert "PNG pHYs" in diagnostics, f"{completed!r}; diagnostics={diagnostics!r}"
     assert "ICC" in diagnostics
 
 
