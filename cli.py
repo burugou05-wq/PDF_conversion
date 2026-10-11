@@ -9,7 +9,19 @@ from file_model import FileModel
 from image_processor import DEFAULT_DPI, ConversionOptions, convert_to_pdf, inspect_image
 
 
+def configure_console_encoding():
+    """Keep Japanese CLI diagnostics usable when Windows uses a legacy code page."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main():
+    configure_console_encoding()
     parser = argparse.ArgumentParser(description="画像を指定順でPDFに変換します")
     parser.add_argument("images", nargs="+", type=Path, help="画像またはフォルダ")
     parser.add_argument("-o", "--output", required=True, type=Path)
