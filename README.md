@@ -99,7 +99,7 @@ GitHub ActionsはWindows通常版EXEとポータブルZIPをartifactとして作
 
 ## WinUI 3版（開発中）
 
-Windows 11に合わせたネイティブUIを `winui/` に追加しています。既存のTkinter版は引き続き通常リリースに使います。CIはWinUI版もWindows上でビルドし、Actions artifact `ImageToPDF-WinUI-Preview` としてプレビューZIPを生成しますが、実機での操作検証が終わるまでは通常リリースに切り替えません。開発手順と現在の制限は [`winui/README.md`](winui/README.md) をご覧ください。
+Windows 11に合わせたネイティブUIを `winui/` に追加しています。既存のTkinter版は引き続き通常リリースに使います。CIはWinUI版もWindows上でビルドし、[GitHub Actions](https://github.com/burugou05-wq/PDF_conversion/actions/workflows/ci.yml) のartifact `ImageToPDF-WinUI-Preview` としてプレビューZIPを生成します。実機での操作検証が終わるまでは通常Releaseに切り替えません。開発手順と現在の制限は [`winui/README.md`](winui/README.md) をご覧ください。
 
 ## CLI
 

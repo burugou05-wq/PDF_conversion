@@ -41,7 +41,7 @@
 
 ## WinUI 3 UIプレビュー
 
-C#のWinUI 3画面と、既存Python変換エンジンを呼び出すJSONLワーカーを追加しました。ワーカーの変換・進捗・部分スキップ・サムネイルプロトコルはLinux上の自動テストで確認しています。開発環境に.NET SDKとWindowsがないため、WinUIプロジェクトのコンパイル、実機表示、WinUIワーカーEXEへのパッケージングは未確認です。Windows CIではWinUIプレビューZIPをartifactとして作成する設定にし、実機テストを通すまでは既存UIをリリース版として維持します。
+C#のWinUI 3画面と、既存Python変換エンジンを呼び出すJSONLワーカーを追加しました。Linux上の自動テストでワーカーの変換・進捗・部分スキップ・サムネイルプロトコルを確認し、[Windows CI run 38367226687](https://github.com/burugou05-wq/PDF_conversion/actions/runs/38367226687) でWinUIのコンパイル／publish、同梱ワーカーによるPDF変換スモークテスト、プレビューZIPとSHA-256一覧の生成まで成功しました。Actions artifact名は `ImageToPDF-WinUI-Preview` です。実機での画面起動・操作はまだ検証していないため、これは試作版であり、通常Releaseは従来UIのままです。
 
 ## まだ実施していない確認
 
@@ -51,6 +51,5 @@ C#のWinUI 3画面と、既存Python変換エンジンを呼び出すJSONLワー
 - 複数モニター・複数DPI環境での画面確認
 - 大量・巨大画像による性能と長時間負荷の測定
 - 実行ファイル内での全画像形式のエンドツーエンド操作
-- GitHub Actionsのリモート実行（ビルド・公開ワークフローは追加済み）
 
 これらは起動スモークテストや単体テストだけでは代替できません。配布前の確認事項として残します。
