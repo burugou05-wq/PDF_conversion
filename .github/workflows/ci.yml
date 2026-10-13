@@ -43,8 +43,6 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - uses: microsoft/setup-msbuild@v2
-        with:
-          vs-version: '[17.0,18.0)'
       - name: Build self-contained WinUI preview package
         shell: pwsh
         run: .\build_winui.ps1
