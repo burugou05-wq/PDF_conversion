@@ -1,0 +1,101 @@
+$ErrorActionPreference = "Stop"
+$RepoRoot = $PSScriptRoot
+$Project = Join-Path $RepoRoot "winui\ImageToPDF.WinUI\ImageToPDF.WinUI.csproj"
+$PublishDirectory = Join-Path $RepoRoot "dist\ImageToPDF-WinUI"
+$DistDirectory = Join-Path $RepoRoot "dist"
+
+if ($env:OS -ne "Windows_NT") {
+    throw "WinUI 3 builds require Windows."
+}
+
+Push-Location $RepoRoot
+try {
+    & python -m pip install -r (Join-Path $RepoRoot "requirements-dev.txt") -r (Join-Path $RepoRoot "requirements-optional.txt")
+    if ($LASTEXITCODE -ne 0) { throw "Python dependency setup failed (exit code $LASTEXITCODE)." }
+    & python -m pytest -q
+    if ($LASTEXITCODE -ne 0) { throw "Python tests failed (exit code $LASTEXITCODE)." }
+    & python -m ruff check .
+    if ($LASTEXITCODE -ne 0) { throw "Ruff checks failed (exit code $LASTEXITCODE)." }
+
+    & python -m PyInstaller --noconfirm --clean `
+        --distpath $DistDirectory `
+        --workpath (Join-Path $RepoRoot "build_tmp\worker") `
+        (Join-Path $RepoRoot "ConversionWorker.spec")
+    if ($LASTEXITCODE -ne 0) { throw "Python worker build failed (exit code $LASTEXITCODE)." }
+
+    # Exercise the frozen worker before it is bundled with the WinUI frontend.
+    $SmokeDirectory = Join-Path $env:TEMP ("ImageToPDF-Worker-Smoke-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $SmokeDirectory | Out-Null
+    try {
+        $SmokeSource = Join-Path $SmokeDirectory "smoke.png"
+        $SmokeRequestPath = Join-Path $SmokeDirectory "request.json"
+        $SmokeOutput = Join-Path $SmokeDirectory "smoke.pdf"
+        & python -c "from PIL import Image; import sys; Image.new('RGB', (16, 16), 'navy').save(sys.argv[1])" $SmokeSource
+        if ($LASTEXITCODE -ne 0) { throw "Could not create the worker smoke-test image." }
+        $SmokeRequest = @{
+            imagePaths = @($SmokeSource)
+            outputPath = $SmokeOutput
+            options = @{ quality = "original" }
+        } | ConvertTo-Json -Compress
+        [System.IO.File]::WriteAllText(
+            $SmokeRequestPath,
+            $SmokeRequest,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        $WorkerOutput = & (Join-Path $DistDirectory "ImageToPDFWorker.exe") --request $SmokeRequestPath
+        $WorkerExitCode = $LASTEXITCODE
+        if ($WorkerExitCode -ne 0) {
+            throw "Frozen worker smoke test failed (exit code $WorkerExitCode): $($WorkerOutput -join [Environment]::NewLine)"
+        }
+        $TerminalEvent = $WorkerOutput |
+            ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.type -eq "completed" } |
+            Select-Object -Last 1
+        if ($null -eq $TerminalEvent -or -not (Test-Path $SmokeOutput)) {
+            throw "Frozen worker smoke test did not produce a completed PDF."
+        }
+        $PdfBytes = [System.IO.File]::ReadAllBytes($SmokeOutput)
+        $PdfHeader = [System.Text.Encoding]::ASCII.GetString($PdfBytes[0..4])
+        if ($PdfHeader -ne "%PDF-") { throw "Frozen worker output is not a PDF." }
+    }
+    finally {
+        Remove-Item $SmokeDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if (Test-Path $PublishDirectory) {
+        Remove-Item $PublishDirectory -Recurse -Force
+    }
+    & dotnet publish $Project -c Release -r win-x64 --self-contained true `
+        -p:Platform=x64 `
+        -p:WindowsAppSDKSelfContained=true `
+        -o $PublishDirectory
+    if ($LASTEXITCODE -ne 0) { throw "WinUI publish failed (exit code $LASTEXITCODE)." }
+
+    foreach ($RequiredFile in @("ImageToPDF.WinUI.exe", "ImageToPDFWorker.exe")) {
+        if (-not (Test-Path (Join-Path $PublishDirectory $RequiredFile))) {
+            throw "Required WinUI package file is missing: $RequiredFile"
+        }
+    }
+
+    $Version = & python -c "from app_config import VERSION; print(VERSION)"
+    if ($LASTEXITCODE -ne 0) { throw "Could not read the application version." }
+    $PortableNote = @"
+ImageToPDF WinUI portable build v$Version
+
+Extract the complete folder and run ImageToPDF.WinUI.exe.
+Keep ImageToPDFWorker.exe and the other files beside the application.
+"@
+    Set-Content -Path (Join-Path $PublishDirectory "PORTABLE.txt") -Value $PortableNote -Encoding UTF8
+
+    $Archive = Join-Path $DistDirectory "ImageToPDF-v$Version-Windows-x64-WinUI-Portable.zip"
+    if (Test-Path $Archive) { Remove-Item $Archive -Force }
+    Compress-Archive -Path (Join-Path $PublishDirectory "*") -DestinationPath $Archive -CompressionLevel Optimal
+    $Hash = (Get-FileHash -Path $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -Path (Join-Path $DistDirectory "SHA256SUMS-WinUI.txt") `
+        -Value "$Hash  $(Split-Path -Leaf $Archive)" -Encoding ASCII
+
+    Write-Host "WinUI portable package created: $Archive"
+}
+finally {
+    Pop-Location
+}

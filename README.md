@@ -6,9 +6,11 @@ Windows向けデスクトップアプリです。手動選択・フォルダ一�
 
 ## EXEのダウンロード（一般ユーザー向け）
 
-[GitHub Releases](https://github.com/burugou05-wq/PDF_conversion/releases/tag/v2.0.0) の「Assets」から ImageToPDF-v2.0.0-Windows-x64.exe をダウンロードして起動してください。Pythonのインストールやビルドは不要です。
+[最新のGitHub Release](https://github.com/burugou05-wq/PDF_conversion/releases/latest) の「Assets」から、Windows x64向けの `ImageToPDF-v<version>-Windows-x64.exe` をダウンロードしてください。Pythonのインストールは不要です。
 
-旧版から更新する場合は、旧版を終了してから新しいEXEに置き換えてください。コード署名はありません。警告が出た場合は入手元を確認し、セキュリティソフトが危険と判定したファイルは実行しないでください。検証状況と制限は [更新履歴](CHANGELOG.md) をご確認ください。
+現在の正式配布版は従来のTkinter版です。WinUI 3版は検証用プレビューとして別管理し、Windows CIが作成する `ImageToPDF-WinUI-Preview` artifactから取得できるようにします。WinUI版の検証が完了するまでは、正式Releaseを置き換えません。
+
+正式配布EXEにコード署名はありません。警告が出た場合は入手元を確認し、セキュリティソフトが危険と判定したファイルは実行しないでください。検証状況と制限は [更新履歴](CHANGELOG.md) をご確認ください。
 
 ## 動作環境
 
@@ -83,12 +85,21 @@ AVIF対応はPillowの機能または追加プラグイン、HEIF/HEIC対応は�
 .\.venv\Scripts\python.exe build.py
 ```
 
-テスト・コードチェック成功後、共通の `ImageToPDF.spec` でビルドします。
-出力: `dist\画像PDF変換ツール.exe`。
-`build.ps1` はこのスクリプトを呼ぶだけのラッパーです。
+テスト・コードチェック成功後、共通の `ImageToPDF.spec` から通常版とポータブル版をビルドし、配布用ZIPとSHA-256一覧を作成します。
 
-既に依存を入れている場合は `build.py --skip-install` を使えます。
+- `dist\画像PDF変換ツール.exe`: 通常版の単体実行ファイル
+- `dist\ImageToPDF-v<version>-Windows-x64.exe`: リリース用の通常版
+- `dist\ImageToPDF-v<version>-Windows-x64-Portable.zip`: ポータブル版（展開してフォルダーごと利用）
+- `dist\SHA256SUMS.txt`: 配布用EXEとZIPのチェックサム
+
+`build.py --target release` と `build.py --target portable` で片方だけをビルドできます。既に依存を入れている場合は `build.py --skip-install` を使えます。`build.ps1` はこのスクリプトを呼ぶだけのラッパーです。
 ビルドはWindowsで行ってください。配布前にPython未導入のWindowsでも起動・変換・DnDを確認してください。
+
+GitHub ActionsはWindows通常版EXEとポータブルZIPをartifactとして作成します。`app_config.py` のバージョンに一致する `v<バージョン>` タグをpushすると、この従来版の配布物とチェックサムをGitHub Releaseへ公開します。WinUI 3プレビューはActions artifactとして別途生成し、正式Releaseには含めません。既存ReleaseのAssetsはタグをpushしただけでは変更されません。
+
+## WinUI 3版（開発中）
+
+Windows 11に合わせたネイティブUIを `winui/` に追加しています。既存のTkinter版は引き続き通常リリースに使います。CIはWinUI版もWindows上でビルドし、Actions artifact `ImageToPDF-WinUI-Preview` としてプレビューZIPを生成しますが、実機での操作検証が終わるまでは通常リリースに切り替えません。開発手順と現在の制限は [`winui/README.md`](winui/README.md) をご覧ください。
 
 ## CLI
 
@@ -107,7 +118,7 @@ AVIF対応はPillowの機能または追加プラグイン、HEIF/HEIC対応は�
 .\.venv\Scripts\python.exe -m ruff check .
 ```
 
-CIはWindows/LinuxのPython 3.11/3.12でテストし、Windows EXEをartifactとして生成します。
+CIはWindows/LinuxのPython 3.11/3.12でテストし、Windows通常版EXEとポータブルZIPをartifactとして生成します。バージョンタグからはGitHub Releaseも公開します。
 直接依存は固定しています。完全な推移依存ロックではありません。
 
 構成:
@@ -117,13 +128,16 @@ CIはWindows/LinuxのPython 3.11/3.12でテストし、Windows EXEをartifactと
 - `image_processor.py`: ヘッドレス変換、PDF配置、安全な保存
 - `ui_theme.py`: テーマ
 - `cli.py`: CLI
-- `app_config.py`: 名前・バージョン
-- `tests/`: 選択操作、用紙寸法、画像処理、キャンセル、保存失敗の回帰テスト
+- `app_config.py`: 名前・バージョン・配布設定
+- `app_paths.py`: ログの保存先（ポータブル版はアプリフォルダー内）
+- `conversion_worker.py`: WinUI版から利用する変換・サムネイルワーカー
+- `winui/`: 開発中のC# WinUI 3フロントエンド
+- `tests/`: 選択操作、用紙寸法、画像処理、キャンセル、配布パス、ワーカープロトコルの回帰テスト
 
 ## 制限・運用
 
 - 自己更新機能は削除しました。配布元から新しいEXEを手動で取得してください。
 - 画像前処理は逐次実行し、巨大画像の同時展開を避けます。ただしPDF結合のオブジェクトはメモリに保持されるため、無制限の大量画像処理を保証しません。
 - 画像パーサーの安全性のため、Pillowの巨大画像保護を無効にしていません。
-- ログ: Windowsでは `%LOCALAPPDATA%\ImageToPDF\app.log`。画像パスや失敗理由を含むため、共有前に内容を確認してください。
+- ログ: 通常版は `%LOCALAPPDATA%\ImageToPDF\app.log`、ポータブル版は実行ファイルの隣の `PortableData\app.log` に保存されます。画像パスや失敗理由を含むため、共有前に内容を確認してください。
 - 配布ライセンスはこのリポジトリでは指定していません。公開配布する場合は権利者が決定し、依存ライブラリの条件も確認してください。
