@@ -65,10 +65,14 @@ try {
     if (Test-Path $PublishDirectory) {
         Remove-Item $PublishDirectory -Recurse -Force
     }
-    $PublishOutput = @(& dotnet publish $Project -c Release -r win-x64 --self-contained true `
-        -p:Platform=x64 `
-        -p:WindowsAppSDKSelfContained=true `
-        -o $PublishDirectory 2>&1)
+    $MSBuildPath = (Get-Command MSBuild.exe -ErrorAction Stop).Source
+    $PublishOutput = @(& $MSBuildPath $Project /restore /target:Publish `
+        /property:Configuration=Release `
+        /property:Platform=x64 `
+        /property:RuntimeIdentifier=win-x64 `
+        /property:SelfContained=true `
+        /property:WindowsAppSDKSelfContained=true `
+        "/property:PublishDir=$PublishDirectory\" 2>&1)
     $PublishExitCode = $LASTEXITCODE
     $PublishOutput | ForEach-Object { Write-Host $_ }
     if ($PublishExitCode -ne 0) {
@@ -77,9 +81,9 @@ try {
             $PublishDetails = $PublishDetails.Substring($PublishDetails.Length - 3000)
         }
         $EncodedPublishDetails = $PublishDetails.Replace("%", "%25") -replace "[\r\n]+", " | "
-        Write-Host "::error title=dotnet publish output::$EncodedPublishDetails"
+        Write-Host "::error title=MSBuild publish output::$EncodedPublishDetails"
         if ($env:GITHUB_STEP_SUMMARY) {
-            "### dotnet publish output`n`n````text`n$PublishDetails`n````" |
+            "### MSBuild publish output`n`n````text`n$PublishDetails`n````" |
                 Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
         }
         throw "WinUI publish failed (exit code $PublishExitCode)."

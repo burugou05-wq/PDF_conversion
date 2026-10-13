@@ -19,7 +19,7 @@ The existing Tkinter application and CLI are left intact while this frontend is 
 
 ## Development
 
-Build and run on Windows 10/11 x64 with the .NET 8 SDK, Windows App SDK restore access, Python 3.10–3.12, and the repository's Python dependencies installed:
+Build and run on Windows 10/11 x64 with the .NET 8 SDK, Visual Studio 2022 MSBuild and Windows SDK tooling, Windows App SDK restore access, Python 3.10–3.12, and the repository's Python dependencies installed:
 
 ```powershell
 python -m pip install -r requirements-dev.txt -r requirements-optional.txt
