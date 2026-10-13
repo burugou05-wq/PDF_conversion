@@ -65,11 +65,25 @@ try {
     if (Test-Path $PublishDirectory) {
         Remove-Item $PublishDirectory -Recurse -Force
     }
-    & dotnet publish $Project -c Release -r win-x64 --self-contained true `
+    $PublishOutput = @(& dotnet publish $Project -c Release -r win-x64 --self-contained true `
         -p:Platform=x64 `
         -p:WindowsAppSDKSelfContained=true `
-        -o $PublishDirectory
-    if ($LASTEXITCODE -ne 0) { throw "WinUI publish failed (exit code $LASTEXITCODE)." }
+        -o $PublishDirectory 2>&1)
+    $PublishExitCode = $LASTEXITCODE
+    $PublishOutput | ForEach-Object { Write-Host $_ }
+    if ($PublishExitCode -ne 0) {
+        $PublishDetails = ($PublishOutput | Out-String -Width 3000).Trim()
+        if ($PublishDetails.Length -gt 3000) {
+            $PublishDetails = $PublishDetails.Substring($PublishDetails.Length - 3000)
+        }
+        $EncodedPublishDetails = $PublishDetails.Replace("%", "%25") -replace "[\r\n]+", " | "
+        Write-Host "::error title=dotnet publish output::$EncodedPublishDetails"
+        if ($env:GITHUB_STEP_SUMMARY) {
+            "### dotnet publish output`n`n````text`n$PublishDetails`n````" |
+                Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+        }
+        throw "WinUI publish failed (exit code $PublishExitCode)."
+    }
 
     foreach ($RequiredFile in @("ImageToPDF.WinUI.exe", "ImageToPDFWorker.exe")) {
         if (-not (Test-Path (Join-Path $PublishDirectory $RequiredFile))) {
