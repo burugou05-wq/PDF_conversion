@@ -96,6 +96,17 @@ Keep ImageToPDFWorker.exe and the other files beside the application.
 
     Write-Host "WinUI portable package created: $Archive"
 }
+catch {
+    $Details = ($_ | Out-String -Width 3000).Trim() -replace "[\r\n]+", " | "
+    if ($Details.Length -gt 3000) { $Details = $Details.Substring(0, 3000) }
+    $EncodedDetails = $Details.Replace("%", "%25")
+    Write-Host "::error title=WinUI package build failed::$EncodedDetails"
+    if ($env:GITHUB_STEP_SUMMARY) {
+        "### WinUI package build failed`n`n````text`n$Details`n````" |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+    }
+    throw
+}
 finally {
     Pop-Location
 }
