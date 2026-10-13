@@ -10,7 +10,15 @@ from app_config import APP_NAME
 HERE = Path(__file__).resolve().parent
 
 
+def configure_console_encoding():
+    """Avoid Windows code-page failures when build paths contain Japanese text."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main():
+    configure_console_encoding()
     parser = argparse.ArgumentParser(description="Build the Windows executable")
     parser.add_argument("--skip-install", action="store_true", help="Use the current environment")
     arguments = parser.parse_args()
