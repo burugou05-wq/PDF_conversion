@@ -16,6 +16,7 @@ def invoke_worker(tmp_path, request):
     completed = subprocess.run(
         [sys.executable, str(WORKER), "--request", str(request_path)],
         input="",
+        encoding="utf-8",
         text=True,
         capture_output=True,
         check=False,
