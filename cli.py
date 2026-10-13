@@ -9,7 +9,15 @@ from file_model import FileModel
 from image_processor import ConversionOptions, convert_to_pdf
 
 
+def configure_console_encoding():
+    """Keep Japanese CLI messages safe when Windows redirects output to a pipe."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main():
+    configure_console_encoding()
     parser = argparse.ArgumentParser(description="画像を指定順でPDFに変換します")
     parser.add_argument("images", nargs="+", type=Path, help="画像またはフォルダ")
     parser.add_argument("-o", "--output", required=True, type=Path)
