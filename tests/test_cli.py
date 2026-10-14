@@ -63,7 +63,8 @@ def test_cli_verbose_reports_dpi_source(tmp_path):
             "--verbose",
         ],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        check=False,
     )
 
     assert completed.returncode == 0, completed.stderr
