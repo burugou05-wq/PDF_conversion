@@ -131,6 +131,7 @@ public sealed class ConversionWorkerService
     {
         var baseDirectory = AppContext.BaseDirectory;
         var packagedWorker = Path.Combine(baseDirectory, "ImageToPDFWorker.exe");
+        var embeddedWorker = EmbeddedWorker.TryGetWorkerPath();
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
@@ -144,7 +145,12 @@ public sealed class ConversionWorkerService
             WorkingDirectory = baseDirectory,
         };
 
-        if (File.Exists(packagedWorker))
+        if (embeddedWorker is not null)
+        {
+            startInfo.FileName = embeddedWorker;
+            startInfo.WorkingDirectory = Path.GetDirectoryName(embeddedWorker)!;
+        }
+        else if (File.Exists(packagedWorker))
         {
             startInfo.FileName = packagedWorker;
         }
