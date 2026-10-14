@@ -157,6 +157,7 @@ function Assert-PortableArchive {
             "ImageToPDF.WinUI.dll",
             "ImageToPDF.WinUI.deps.json",
             "ImageToPDF.WinUI.runtimeconfig.json",
+            "ImageToPDF.WinUI.pri",
             "coreclr.dll",
             "hostfxr.dll",
             "hostpolicy.dll",
@@ -166,6 +167,9 @@ function Assert-PortableArchive {
             if (-not $Entries.ContainsKey($RequiredFile)) {
                 throw "Required file is missing from portable archive: $RequiredFile"
             }
+        }
+        if (@($Entries.Keys | Where-Object { $_ -match '\.xbf$' }).Count -eq 0) {
+            throw "Portable archive is missing compiled WinUI XAML resources (.xbf files)."
         }
 
         foreach ($ExecutableName in @("ImageToPDF.WinUI.exe", "ImageToPDFWorker.exe")) {
@@ -182,6 +186,38 @@ function Assert-PortableArchive {
     }
 }
 
+function Get-WinUiCrashContext {
+    param(
+        [Parameter(Mandatory)][string]$ExecutablePath,
+        [Parameter(Mandatory)][datetime]$StartedAt
+    )
+
+    try {
+        $ExecutableName = [System.IO.Path]::GetFileName($ExecutablePath)
+        $CrashEvents = @(Get-WinEvent `
+            -FilterHashtable @{ LogName = "Application"; StartTime = $StartedAt } `
+            -MaxEvents 40 `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.ProviderName -in @("Application Error", ".NET Runtime", "Windows Error Reporting") -and
+                $_.Message -like "*$ExecutableName*"
+            } |
+            Select-Object -First 4)
+        if ($CrashEvents.Count -eq 0) {
+            return "No matching Application/.NET crash event was recorded."
+        }
+
+        return (($CrashEvents | ForEach-Object {
+            $Message = ($_.Message -replace "[\r\n]+", " ").Trim()
+            if ($Message.Length -gt 1200) { $Message = $Message.Substring(0, 1200) }
+            "{0} event {1}: {2}" -f $_.ProviderName, $_.Id, $Message
+        }) -join " || ")
+    }
+    catch {
+        return "Could not read Windows Application crash events: $($_.Exception.Message)"
+    }
+}
+
 function Test-WinUiStartup {
     param(
         [Parameter(Mandatory)][string]$ExecutablePath,
@@ -189,6 +225,7 @@ function Test-WinUiStartup {
     )
 
     $Process = $null
+    $StartupStartedAt = Get-Date
     try {
         $Process = Start-Process -FilePath $ExecutablePath -WorkingDirectory $WorkingDirectory -PassThru
         if (-not $Process.WaitForInputIdle(20000)) {
@@ -200,7 +237,9 @@ function Test-WinUiStartup {
         do {
             $Process.Refresh()
             if ($Process.HasExited) {
-                throw "WinUI process exited during startup (exit code $($Process.ExitCode))."
+                Start-Sleep -Milliseconds 500
+                $CrashContext = Get-WinUiCrashContext -ExecutablePath $ExecutablePath -StartedAt $StartupStartedAt
+                throw "WinUI process exited during startup (exit code $($Process.ExitCode)). $CrashContext"
             }
             if ($Process.MainWindowTitle -eq $ExpectedTitle) { break }
             Start-Sleep -Milliseconds 250
@@ -208,7 +247,9 @@ function Test-WinUiStartup {
 
         $Process.Refresh()
         if ($Process.HasExited) {
-            throw "WinUI process exited during startup (exit code $($Process.ExitCode))."
+            Start-Sleep -Milliseconds 500
+            $CrashContext = Get-WinUiCrashContext -ExecutablePath $ExecutablePath -StartedAt $StartupStartedAt
+            throw "WinUI process exited during startup (exit code $($Process.ExitCode)). $CrashContext"
         }
         if ($Process.MainWindowTitle -ne $ExpectedTitle) {
             throw "WinUI main window was not found. Actual title: '$($Process.MainWindowTitle)'"
@@ -291,6 +332,7 @@ try {
         "ImageToPDF.WinUI.dll",
         "ImageToPDF.WinUI.deps.json",
         "ImageToPDF.WinUI.runtimeconfig.json",
+        "ImageToPDF.WinUI.pri",
         "coreclr.dll",
         "hostfxr.dll",
         "hostpolicy.dll"
@@ -299,6 +341,10 @@ try {
         if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $RequiredFile) -PathType Leaf)) {
             throw "Required self-contained publish file is missing: $RequiredFile"
         }
+    }
+    $PublishedXamlBinaries = @(Get-ChildItem -LiteralPath $PublishDirectory -Filter "*.xbf" -File -Recurse)
+    if ($PublishedXamlBinaries.Count -eq 0) {
+        throw "Self-contained publish is missing compiled WinUI XAML resources (.xbf files)."
     }
 
     foreach ($ExecutableName in @("ImageToPDF.WinUI.exe", "ImageToPDFWorker.exe")) {

@@ -30,4 +30,35 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
+
+  <!-- Unpackaged WinUI publishes currently omit the app's generated PRI file. -->
+  <Target
+    Name="IncludeWinUIProjectPriInPublish"
+    BeforeTargets="ComputeResolvedFilesToPublishList"
+    DependsOnTargets="$(GenerateProjectPriFile)"
+    Condition="'$(WindowsPackageType)' == 'None' and '$(UseWinUI)' == 'true'">
+    <Error
+      Condition="'$(ProjectPriFullPath)' == '' or !Exists('$(ProjectPriFullPath)')"
+      Text="The generated WinUI project PRI is missing: $(ProjectPriFullPath)" />
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(ProjectPriFullPath)">
+        <RelativePath>$(ProjectPriFileName)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <!-- Keep the compiled XAML binary resources beside the unpackaged app too. -->
+  <Target
+    Name="CopyWinUIXamlBinariesToPublish"
+    AfterTargets="Publish"
+    Condition="'$(WindowsPackageType)' == 'None' and '$(UseWinUI)' == 'true'">
+    <ItemGroup>
+      <_WinUIXamlBinary Include="$(OutputPath)**\*.xbf" Exclude="$(PublishDir)**\*.xbf" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(_WinUIXamlBinary)"
+      DestinationFiles="@(_WinUIXamlBinary-&gt;'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+  </Target>
 </Project>
