@@ -34,8 +34,10 @@ To create a self-contained WinUI folder and portable ZIP, run from PowerShell on
 .\build_winui.ps1
 ```
 
-The script builds a console-capable worker executable for redirected JSONL communication, publishes the WinUI app with the Windows App SDK self-contained, and packages the folder. The worker's console window is suppressed by the WinUI process launcher.
+The script builds a console-capable worker executable for redirected JSONL communication, publishes the WinUI app with the Windows App SDK self-contained, and packages the folder. The project explicitly includes its generated app `.pri` and compiled `.xbf` resources in the unpackaged publish output; a missing app PRI caused the first CI launch smoke test to exit with `0xC000027B`. The worker's console window is suppressed by the WinUI process launcher.
 
 ## Validation status
 
-The repository sandbox used for this change has no .NET SDK and is not Windows, so this project has not yet been compiled or launched here. The Windows CI workflow is configured to build and upload an `ImageToPDF-WinUI-Preview` artifact; it is not an official release asset. A successful CI build and clean-machine checks are required before replacing the released Tkinter frontend. In particular, validate the self-contained WinUI runtime, Explorer drag-and-drop, AVIF/HEIF thumbnail fallback, cancellation, Unicode paths, and portable ZIP behavior on Windows 11.
+The repository sandbox has no .NET SDK and is not Windows, so it cannot validate the WinUI executable locally. Windows CI run [38526128543](https://github.com/burugou05-wq/PDF_conversion/actions/runs/38526128543) passed on the final packaging changes and uploaded `ImageToPDF-WinUI-Preview` (not an official release asset). It verifies x64 PE headers, self-contained .NET runtime files, the app PRI and XBF resources, ZIP entries and checksums, worker conversions with Japanese filenames from the build/published/extracted folders, and startup of the WinUI EXE from the extracted ZIP with the expected window title.
+
+The CI launch smoke is a basic startup check, not a substitute for manual testing on a real Windows 11 machine. Keep Tkinter as the official Release until the WinUI runtime, Explorer drag-and-drop, AVIF/HEIF thumbnail fallback, cancellation, Unicode paths, and portable placement have been verified interactively on Windows 11.
