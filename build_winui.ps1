@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 $RepoRoot = $PSScriptRoot
 $Project = Join-Path $RepoRoot "winui\ImageToPDF.WinUI\ImageToPDF.WinUI.csproj"
-$PublishDirectory = Join-Path $RepoRoot "dist\ImageToPDF-WinUI"
+$PublishDirectory = Join-Path $RepoRoot "build_tmp\winui-publish"
 $DistDirectory = Join-Path $RepoRoot "dist"
 
 function Assert-X64PeExecutable {
@@ -120,70 +120,41 @@ function Test-WorkerConversion {
     Write-Host "Unicode-path PDF conversion smoke test passed: $Label"
 }
 
-function Assert-PortableArchive {
+function Test-SingleExeConversion {
     param(
-        [Parameter(Mandatory)][string]$ArchivePath,
-        [Parameter(Mandatory)][string]$PublishPath
+        [Parameter(Mandatory)][string]$ExecutablePath,
+        [Parameter(Mandatory)][string]$WorkingDirectory
     )
 
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $Zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    $ImagePath = Join-Path $WorkingDirectory "入力画像.png"
+    $OutputPdf = Join-Path $WorkingDirectory "変換結果.pdf"
+    & python -c "from PIL import Image; import sys; Image.new('RGB', (37, 53), 'navy').save(sys.argv[1])" $ImagePath
+    if ($LASTEXITCODE -ne 0) { throw "Could not create the single-file smoke-test image." }
+
+    $Process = Start-Process -FilePath $ExecutablePath `
+        -ArgumentList @("--selftest-convert", "`"$ImagePath`"", "`"$OutputPdf`"") `
+        -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
     try {
-        $Entries = @{}
-        foreach ($Entry in $Zip.Entries) {
-            $EntryName = $Entry.FullName.Replace("\", "/")
-            if ($EntryName.StartsWith("/") -or $EntryName -match '(^|/)\.\.(/|$)') {
-                throw "Unsafe path in portable archive: $EntryName"
-            }
-            if ($Entries.ContainsKey($EntryName)) {
-                throw "Duplicate path in portable archive: $EntryName"
-            }
-            $Entries[$EntryName] = $Entry
-
-            if (-not $EntryName.EndsWith("/")) {
-                $EntryStream = $Entry.Open()
-                try {
-                    $EntryStream.CopyTo([System.IO.Stream]::Null)
-                }
-                finally {
-                    $EntryStream.Dispose()
-                }
-            }
+        if (-not $Process.WaitForExit(120000)) {
+            $Process.Kill($true)
+            throw "Single-file conversion self-test timed out."
         }
-
-        $RequiredArchiveFiles = @(
-            "ImageToPDF.WinUI.exe",
-            "ImageToPDFWorker.exe",
-            "ImageToPDF.WinUI.dll",
-            "ImageToPDF.WinUI.deps.json",
-            "ImageToPDF.WinUI.runtimeconfig.json",
-            "ImageToPDF.WinUI.pri",
-            "coreclr.dll",
-            "hostfxr.dll",
-            "hostpolicy.dll",
-            "PORTABLE.txt"
-        )
-        foreach ($RequiredFile in $RequiredArchiveFiles) {
-            if (-not $Entries.ContainsKey($RequiredFile)) {
-                throw "Required file is missing from portable archive: $RequiredFile"
-            }
+        if ($Process.ExitCode -ne 0) {
+            $ErrorFile = "$OutputPdf.selftest-error.txt"
+            $Details = if (Test-Path -LiteralPath $ErrorFile) { [System.IO.File]::ReadAllText($ErrorFile) } else { "no details" }
+            throw "Single-file conversion self-test failed (exit code $($Process.ExitCode)): $Details"
         }
-        if (@($Entries.Keys | Where-Object { $_ -match '\.xbf$' }).Count -eq 0) {
-            throw "Portable archive is missing compiled WinUI XAML resources (.xbf files)."
-        }
-
-        foreach ($ExecutableName in @("ImageToPDF.WinUI.exe", "ImageToPDFWorker.exe")) {
-            $PublishedLength = (Get-Item -LiteralPath (Join-Path $PublishPath $ExecutableName)).Length
-            if ($Entries[$ExecutableName].Length -ne $PublishedLength) {
-                throw "Portable archive entry size does not match the published file: $ExecutableName"
-            }
-        }
-
-        Write-Host "Verified portable ZIP structure and read $($Zip.Entries.Count) entries: $ArchivePath"
     }
     finally {
-        $Zip.Dispose()
+        $Process.Dispose()
     }
+
+    $PdfBytes = [System.IO.File]::ReadAllBytes($OutputPdf)
+    if ([System.Text.Encoding]::ASCII.GetString($PdfBytes[0..4]) -ne "%PDF-") {
+        throw "Single-file conversion did not write a PDF header."
+    }
+
+    Write-Host "Single-file embedded-worker conversion passed: $ExecutablePath"
 }
 
 function Get-WinUiCrashContext {
@@ -289,6 +260,15 @@ try {
     & python -m ruff check .
     if ($LASTEXITCODE -ne 0) { throw "Ruff checks failed (exit code $LASTEXITCODE)." }
 
+    $Version = & python -c "from app_config import VERSION; print(VERSION)"
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Version)) { throw "Could not read the application version." }
+    $Version = $Version.Trim()
+
+    $MainWindowXaml = [System.IO.File]::ReadAllText((Join-Path $RepoRoot "winui\ImageToPDF.WinUI\MainWindow.xaml"))
+    if (-not $MainWindowXaml.Contains("Text=`"v$Version`"")) {
+        throw "winui/ImageToPDF.WinUI/MainWindow.xaml does not show version v$Version."
+    }
+
     & python -m PyInstaller --noconfirm --clean `
         --distpath $DistDirectory `
         --workpath (Join-Path $RepoRoot "build_tmp\worker") `
@@ -299,16 +279,27 @@ try {
     Assert-X64PeExecutable -ExecutablePath $WorkerExecutable
     Test-WorkerConversion -WorkerExecutable $WorkerExecutable -Label "PyInstaller-output"
 
-    if (Test-Path $PublishDirectory) {
-        Remove-Item $PublishDirectory -Recurse -Force
+    $ReleaseName = "ImageToPDF-v$Version-Windows-x64.exe"
+    $ReleaseExecutable = Join-Path $DistDirectory $ReleaseName
+    $ChecksumPath = Join-Path $DistDirectory "SHA256SUMS.txt"
+    foreach ($Stale in @($PublishDirectory, $ReleaseExecutable, $ChecksumPath)) {
+        if (Test-Path -LiteralPath $Stale) {
+            Remove-Item -LiteralPath $Stale -Recurse -Force
+        }
     }
+
     $MSBuildPath = (Get-Command MSBuild.exe -ErrorAction Stop).Source
     $PublishOutput = @(& $MSBuildPath $Project /restore /target:Publish `
         /property:Configuration=Release `
         /property:Platform=x64 `
         /property:RuntimeIdentifier=win-x64 `
         /property:SelfContained=true `
+        /property:PublishSingleFile=true `
+        /property:IncludeNativeLibrariesForSelfExtract=true `
+        /property:IncludeAllContentForSelfExtract=true `
+        /property:EnableCompressionInSingleFile=true `
         /property:WindowsAppSDKSelfContained=true `
+        /property:Version=$Version `
         "/property:PublishDir=$PublishDirectory\" 2>&1)
     $PublishExitCode = $LASTEXITCODE
     $PublishOutput | ForEach-Object { Write-Host $_ }
@@ -326,76 +317,40 @@ try {
         throw "WinUI publish failed (exit code $PublishExitCode)."
     }
 
-    $RequiredPublishedFiles = @(
-        "ImageToPDF.WinUI.exe",
-        "ImageToPDFWorker.exe",
-        "ImageToPDF.WinUI.dll",
-        "ImageToPDF.WinUI.deps.json",
-        "ImageToPDF.WinUI.runtimeconfig.json",
-        "ImageToPDF.WinUI.pri",
-        "coreclr.dll",
-        "hostfxr.dll",
-        "hostpolicy.dll"
-    )
-    foreach ($RequiredFile in $RequiredPublishedFiles) {
-        if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $RequiredFile) -PathType Leaf)) {
-            throw "Required self-contained publish file is missing: $RequiredFile"
-        }
+    $PublishedExecutable = Join-Path $PublishDirectory "ImageToPDF.WinUI.exe"
+    Assert-X64PeExecutable -ExecutablePath $PublishedExecutable
+    $StrayFiles = @(Get-ChildItem -LiteralPath $PublishDirectory -File |
+        Where-Object { $_.Name -ne "ImageToPDF.WinUI.exe" -and $_.Extension -ne ".pdb" })
+    if ($StrayFiles.Count -gt 0) {
+        throw "Single-file publish left files beside the executable: $(($StrayFiles | ForEach-Object { $_.Name }) -join ', ')"
     }
-    $PublishedXamlBinaries = @(Get-ChildItem -LiteralPath $PublishDirectory -Filter "*.xbf" -File -Recurse)
-    if ($PublishedXamlBinaries.Count -eq 0) {
-        throw "Self-contained publish is missing compiled WinUI XAML resources (.xbf files)."
+    $ExecutableSize = (Get-Item -LiteralPath $PublishedExecutable).Length
+    if ($ExecutableSize -lt 20MB) {
+        throw "Single-file executable is unexpectedly small ($ExecutableSize bytes); the runtime or worker may be missing."
     }
 
-    foreach ($ExecutableName in @("ImageToPDF.WinUI.exe", "ImageToPDFWorker.exe")) {
-        Assert-X64PeExecutable -ExecutablePath (Join-Path $PublishDirectory $ExecutableName)
-    }
-    Test-WorkerConversion `
-        -WorkerExecutable (Join-Path $PublishDirectory "ImageToPDFWorker.exe") `
-        -Label "published-folder"
-
-    $Version = & python -c "from app_config import VERSION; print(VERSION)"
-    if ($LASTEXITCODE -ne 0) { throw "Could not read the application version." }
-    $PortableNote = @"
-ImageToPDF WinUI portable build v$Version
-
-Extract the complete folder and run ImageToPDF.WinUI.exe.
-Keep ImageToPDFWorker.exe and the other files beside the application.
-"@
-    Set-Content -Path (Join-Path $PublishDirectory "PORTABLE.txt") -Value $PortableNote -Encoding UTF8
-
-    $Archive = Join-Path $DistDirectory "ImageToPDF-v$Version-Windows-x64-WinUI-Portable.zip"
-    if (Test-Path $Archive) { Remove-Item $Archive -Force }
-    Compress-Archive -Path (Join-Path $PublishDirectory "*") -DestinationPath $Archive -CompressionLevel Optimal
-    $Hash = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
-    $ChecksumPath = Join-Path $DistDirectory "SHA256SUMS-WinUI.txt"
-    $ChecksumLine = "$Hash  $(Split-Path -Leaf $Archive)"
+    Copy-Item -LiteralPath $PublishedExecutable -Destination $ReleaseExecutable -Force
+    $Hash = (Get-FileHash -LiteralPath $ReleaseExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+    $ChecksumLine = "$Hash  $ReleaseName"
     Set-Content -Path $ChecksumPath -Value $ChecksumLine -Encoding ASCII
     if (([System.IO.File]::ReadAllText($ChecksumPath)).Trim() -ne $ChecksumLine) {
-        throw "WinUI artifact checksum file does not match the ZIP."
+        throw "Checksum file does not match the release executable."
     }
 
-    Assert-PortableArchive -ArchivePath $Archive -PublishPath $PublishDirectory
-
-    $ExtractionDirectory = Join-Path $env:TEMP ("ImageToPDF-WinUI-ZipTest-" + [Guid]::NewGuid().ToString("N"))
-    New-Item -ItemType Directory -Path $ExtractionDirectory | Out-Null
+    # Run the release file alone, from a Unicode folder with no build output beside it.
+    $VerificationDirectory = Join-Path $env:TEMP ("画像PDF確認-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $VerificationDirectory | Out-Null
     try {
-        Expand-Archive -LiteralPath $Archive -DestinationPath $ExtractionDirectory
-        foreach ($ExecutableName in @("ImageToPDF.WinUI.exe", "ImageToPDFWorker.exe")) {
-            Assert-X64PeExecutable -ExecutablePath (Join-Path $ExtractionDirectory $ExecutableName)
-        }
-        Test-WorkerConversion `
-            -WorkerExecutable (Join-Path $ExtractionDirectory "ImageToPDFWorker.exe") `
-            -Label "extracted-ZIP"
-        Test-WinUiStartup `
-            -ExecutablePath (Join-Path $ExtractionDirectory "ImageToPDF.WinUI.exe") `
-            -WorkingDirectory $ExtractionDirectory
+        $VerificationExecutable = Join-Path $VerificationDirectory $ReleaseName
+        Copy-Item -LiteralPath $ReleaseExecutable -Destination $VerificationExecutable
+        Test-SingleExeConversion -ExecutablePath $VerificationExecutable -WorkingDirectory $VerificationDirectory
+        Test-WinUiStartup -ExecutablePath $VerificationExecutable -WorkingDirectory $VerificationDirectory
     }
     finally {
-        Remove-Item $ExtractionDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item $VerificationDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    Write-Host "WinUI portable package fully validated: $Archive"
+    Write-Host "WinUI single-file release fully validated: $ReleaseExecutable"
 }
 catch {
     $Details = ($_ | Out-String -Width 3000).Trim() -replace "[\r\n]+", " | "

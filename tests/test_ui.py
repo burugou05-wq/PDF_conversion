@@ -5,9 +5,32 @@ import sys
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "win32" and not os.environ.get("DISPLAY"), reason="Tk needs a display"
+
+def _tk_startup_error():
+    """Return why a plain Tk window cannot start here, or None when it can."""
+    import tkinter as tk
+
+    try:
+        tk.Tk().destroy()
+    except tk.TclError as error:
+        return str(error)
+    return None
+
+
+# Some Windows runner images ship a Python whose Tcl library is incomplete.
+_TK_STARTUP_ERROR = (
+    _tk_startup_error() if sys.platform == "win32" or os.environ.get("DISPLAY") else None
 )
+
+pytestmark = [
+    pytest.mark.skipif(
+        sys.platform != "win32" and not os.environ.get("DISPLAY"), reason="Tk needs a display"
+    ),
+    pytest.mark.skipif(
+        _TK_STARTUP_ERROR is not None,
+        reason=f"Tk cannot start on this runner: {_TK_STARTUP_ERROR}",
+    ),
+]
 
 
 def walk_widgets(widget):
@@ -68,3 +91,28 @@ def test_gui_filtered_delete_targets_the_visible_file(monkeypatch, tmp_path):
 
     monkeypatch.setattr(tk.Tk, "mainloop", smoke)
     assert img2pdf_app.main() == 0
+
+
+def test_gui_falls_back_when_tkdnd_library_fails(monkeypatch):
+    import tkinter as tk
+
+    from tkinterdnd2 import TkinterDnD
+
+    import img2pdf_app
+
+    class BrokenDnDTk(tk.Tk):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            raise RuntimeError("tkdnd unavailable")
+
+    built = []
+    monkeypatch.setattr(img2pdf_app, "configure_logging", lambda: None)
+    monkeypatch.setattr(TkinterDnD, "Tk", BrokenDnDTk)
+
+    def smoke(root):
+        built.append(root)
+        root.destroy()
+
+    monkeypatch.setattr(tk.Tk, "mainloop", smoke)
+    assert img2pdf_app.main() == 0
+    assert built and type(built[0]) is tk.Tk

@@ -29,7 +29,17 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -r requirements-dev.txt -r requirements-optional.txt
       - run: python -m ruff check .
-      - run: python -m pytest -q
+      - run: python -m pytest -q --junitxml=pytest-results.xml
+      - name: Annotate pytest failures
+        if: failure()
+        run: python scripts/report_pytest_failures.py pytest-results.xml
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results-${{ matrix.os }}-${{ matrix.python }}
+          path: pytest-results.xml
+          if-no-files-found: warn
 
   winui-build:
     needs: test
@@ -43,32 +53,14 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - uses: microsoft/setup-msbuild@v2
-      - name: Build self-contained WinUI preview package
+      - name: Build single-file WinUI release
         shell: pwsh
         run: .\build_winui.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: ImageToPDF-WinUI-Preview
-          path: |
-            dist/ImageToPDF-v*-Windows-x64-WinUI-Portable.zip
-            dist/SHA256SUMS-WinUI.txt
-          if-no-files-found: error
-
-  windows-build:
-    needs: test
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: python build.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ImageToPDF-Windows
+          name: ImageToPDF-WinUI-Release
           path: |
             dist/ImageToPDF-v*-Windows-x64.exe
-            dist/ImageToPDF-v*-Windows-x64-Portable.zip
             dist/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -76,7 +68,7 @@ jobs:
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
-    needs: windows-build
+    needs: winui-build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -100,7 +92,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
-          name: ImageToPDF-Windows
+          name: ImageToPDF-WinUI-Release
           path: release-assets
       - name: Publish release assets
         env:
@@ -108,8 +100,12 @@ jobs:
         shell: bash
         run: |
           tag="${{ steps.release-tag.outputs.tag }}"
+          # The release page body is the matching CHANGELOG.md section.
+          awk -v heading="## $tag " 'index($0, heading) == 1 { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > release-notes.md
+          title="$(grep -m1 "^## $tag " CHANGELOG.md | sed 's/^## //')"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" release-assets/* --clobber
           else
-            gh release create "$tag" release-assets/* --title "$tag" --generate-notes
+            # Pin the tag to the commit that was built, not the default branch head.
+            gh release create "$tag" release-assets/* --target "$GITHUB_SHA" --title "${title:-$tag}" --notes-file release-notes.md
           fi
