@@ -77,6 +77,13 @@ def test_gui_falls_back_when_tkdnd_library_fails(monkeypatch):
 
     import img2pdf_app
 
+    # Some Windows runner images ship a Python whose Tcl library is incomplete.
+    # Then no plain Tk window can start, so this test cannot reach the fallback.
+    try:
+        tk.Tk().destroy()
+    except tk.TclError as error:
+        pytest.skip(f"Tk cannot start on this runner: {error}")
+
     class BrokenDnDTk(tk.Tk):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
