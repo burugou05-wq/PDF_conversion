@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from app_config import APP_NAME, VERSION
+from app_paths import log_directory
 from file_model import FileModel, list_images
 from ui_theme import COLORS, apply_theme
 
@@ -31,7 +32,7 @@ def set_dpi_aware():
 
 
 def configure_logging():
-    directory = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ImageToPDF"
+    directory = log_directory()
     try:
         directory.mkdir(parents=True, exist_ok=True)
         from logging.handlers import RotatingFileHandler

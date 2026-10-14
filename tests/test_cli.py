@@ -18,6 +18,7 @@ def test_cli_conversion(tmp_path):
         capture_output=True,
     )
     assert completed.returncode == 0, completed.stderr
+    assert "ページ".encode("utf-8") in completed.stdout
     assert len(PdfReader(output).pages) == 1
 
 
@@ -41,4 +42,5 @@ def test_cli_partial_success_exit_code(tmp_path):
         capture_output=True,
     )
     assert completed.returncode == 2
+    assert "スキップ".encode("utf-8") in completed.stderr
     assert (tmp_path / "out.pdf").exists()
