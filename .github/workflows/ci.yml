@@ -106,5 +106,6 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" release-assets/* --clobber
           else
-            gh release create "$tag" release-assets/* --title "${title:-$tag}" --notes-file release-notes.md
+            # Pin the tag to the commit that was built, not the default branch head.
+            gh release create "$tag" release-assets/* --target "$GITHUB_SHA" --title "${title:-$tag}" --notes-file release-notes.md
           fi
