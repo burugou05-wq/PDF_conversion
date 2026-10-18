@@ -10,3 +10,4 @@ dist/
 **/obj/
 .vs/
 *.log
+pytest-results.xml

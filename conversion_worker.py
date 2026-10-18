@@ -27,7 +27,13 @@ import sys
 import threading
 from pathlib import Path
 
-from image_processor import ConversionCancelled, ConversionOptions, convert_to_pdf, make_thumbnail
+from image_processor import (
+    DEFAULT_DPI,
+    ConversionCancelled,
+    ConversionOptions,
+    convert_to_pdf,
+    make_thumbnail,
+)
 
 LOGGER = logging.getLogger("ImageToPDF.Worker")
 
@@ -47,6 +53,7 @@ def options_from_request(request):
         margin_mm=float(values.get("marginMm", 0)),
         bg_color=tuple(values.get("background", [255, 255, 255])),
         auto_rotate=bool(values.get("autoRotate", True)),
+        default_dpi=float(values.get("defaultDpi", DEFAULT_DPI)),
     )
 
 

@@ -6,11 +6,6 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: "Optional version tag to publish or update after a manual build"
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -31,7 +26,17 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -r requirements-dev.txt -r requirements-optional.txt
       - run: python -m ruff check .
-      - run: python -m pytest -q
+      - run: python -m pytest -q --junitxml=pytest-results.xml
+      - name: Annotate pytest failures
+        if: failure()
+        run: python scripts/report_pytest_failures.py pytest-results.xml
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pytest-results-${{ matrix.os }}-${{ matrix.python }}
+          path: pytest-results.xml
+          if-no-files-found: warn
 
   winui-build:
     needs: test
@@ -45,40 +50,24 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2.0.0
-      - name: Build self-contained WinUI preview package
+      - name: Build single-file WinUI release
         shell: pwsh
         run: .\build_winui.ps1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ImageToPDF-WinUI-Preview
-          path: |
-            dist/ImageToPDF-v*-Windows-x64-WinUI-Portable.zip
-            dist/SHA256SUMS-WinUI.txt
-          if-no-files-found: error
-
-  windows-build:
-    needs: test
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: '3.11'
-      - run: python build.py
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ImageToPDF-Windows
+          name: ImageToPDF-WinUI-Release
           path: |
             dist/ImageToPDF-v*-Windows-x64.exe
-            dist/ImageToPDF-v*-Windows-x64-Portable.zip
             dist/SHA256SUMS.txt
+            dist/LICENSE
+            dist/THIRD_PARTY_NOTICES.md
           if-no-files-found: error
 
   publish-release:
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
-    needs: windows-build
+      github.event_name == 'workflow_dispatch'
+    needs: winui-build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -87,22 +76,21 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
-      - name: Verify tag and application version match
+      - name: Determine release tag from the application version
         id: release-tag
-        env:
-          REQUESTED_TAG: ${{ github.event.inputs.release_tag || '' }}
         shell: bash
         run: |
-          tag="${REQUESTED_TAG:-$GITHUB_REF_NAME}"
+          # The tag always comes from app_config.py, so typed inputs cannot change it.
           version="$(python -c 'from app_config import VERSION; print(VERSION)')"
-          if [[ "$tag" != "v$version" ]]; then
-            echo "Tag $tag does not match app version v$version" >&2
+          tag="v$version"
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_NAME" != "$tag" ]]; then
+            echo "Pushed tag $GITHUB_REF_NAME does not match app version $tag" >&2
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: ImageToPDF-Windows
+          name: ImageToPDF-WinUI-Release
           path: release-assets
       - name: Publish release assets
         env:
@@ -110,8 +98,12 @@ jobs:
         shell: bash
         run: |
           tag="${{ steps.release-tag.outputs.tag }}"
+          # The release page body is the matching CHANGELOG.md section.
+          awk -v heading="## $tag " 'index($0, heading) == 1 { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > release-notes.md
+          title="$(grep -m1 "^## $tag " CHANGELOG.md | sed 's/^## //')"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" release-assets/* --clobber
           else
-            gh release create "$tag" release-assets/* --title "$tag" --generate-notes
+            # Pin the tag to the commit that was built, not the default branch head.
+            gh release create "$tag" release-assets/* --target "$GITHUB_SHA" --title "${title:-$tag}" --notes-file release-notes.md
           fi

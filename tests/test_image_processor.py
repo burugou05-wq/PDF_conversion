@@ -1,10 +1,11 @@
 import errno
+import io
 import threading
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageCms
 from pypdf import PdfReader
 
 import image_processor
@@ -13,9 +14,11 @@ from image_processor import (
     ConversionCancelled,
     ConversionOptions,
     convert_to_pdf,
+    inspect_image,
     make_thumbnail,
     normalize_dpi,
     page_geometry,
+    resolve_dpi,
 )
 
 
@@ -168,6 +171,9 @@ def test_original_jpeg_bytes_preserved(tmp_path):
     page = PdfReader(output).pages[0]
     objects = page["/Resources"]["/XObject"]
     image_stream = next(iter(objects.values())).get_object()
+    color_space = image_stream["/ColorSpace"]
+    assert color_space[0] == "/ICCBased"
+    assert color_space[1].get_object()["/N"] == 3
     assert image_stream.get_data() == source.read_bytes()
 
 
@@ -280,6 +286,11 @@ def test_cmyk_with_profile_converted_via_imagecms(tmp_path, monkeypatch):
     with Image.new("CMYK", (30, 20), (0, 255, 255, 0)) as image:
         image.save(source, icc_profile=srgb_profile_bytes())
 
+    # A real CMYK profile is not redistributable with this repository, so the
+    # profile/colorspace validation is neutralized here and only the wiring is
+    # checked: the CMYK frame goes through LittleCMS and is tagged sRGB.
+    monkeypatch.setattr(image_processor, "_validate_embedded_icc", lambda _image: None)
+
     def fake_profile_to_profile(image, *_args, **_kwargs):
         return Image.new("RGB", image.size, (12, 34, 56))
 
@@ -303,14 +314,18 @@ def test_cmyk_without_profile_uses_simple_conversion(tmp_path):
     assert image.convert("RGB").getpixel((0, 0)) == expected
 
 
-def test_cmyk_with_broken_profile_still_converts(tmp_path):
+def test_cmyk_with_broken_profile_is_skipped(tmp_path):
+    # A broken profile means the colors cannot be interpreted reliably, so the
+    # image is skipped with a reason instead of converting to wrong colors.
     source = tmp_path / "broken_profile_cmyk.tiff"
     with Image.new("CMYK", (30, 20), (0, 0, 255, 0)) as image:
         image.save(source, icc_profile=b"not an icc profile")
+    valid = create_image(tmp_path / "valid.png")
     output = tmp_path / "out.pdf"
-    result = convert_to_pdf([source], output)
+    result = convert_to_pdf([source, valid], output)
     assert result.page_count == 1
-    assert not result.skipped
+    assert len(result.skipped) == 1
+    assert "ICCプロファイル" in result.skipped[0].reason
 
 
 def test_group4_tiff_passes_through_without_reencoding(tmp_path):
@@ -493,3 +508,179 @@ def test_group4_tiff_without_resolution_uses_default_dpi(tmp_path):
     page = PdfReader(output).pages[0]
     assert float(page.mediabox.width) == pytest.approx(450.0, abs=0.5)
     assert float(page.mediabox.height) == pytest.approx(300.0, abs=0.5)
+
+def _pdf_image_object(output):
+    page = PdfReader(output).pages[0]
+    objects = page["/Resources"]["/XObject"]
+    return next(iter(objects.values())).get_object()
+
+
+def test_native_png_icc_profile_is_embedded_in_pdf(tmp_path):
+    source = tmp_path / "profiled.png"
+    profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    with Image.new("RGB", (24, 32), (80, 120, 160)) as image:
+        image.save(source, icc_profile=profile)
+
+    output = tmp_path / "out.pdf"
+    convert_to_pdf([source], output)
+
+    image_object = _pdf_image_object(output)
+    color_space = image_object["/ColorSpace"]
+    assert color_space[0] == "/ICCBased"
+    assert color_space[1].get_object()["/N"] == 3
+
+
+def test_transcoded_icc_image_is_converted_to_srgb_and_profiled(tmp_path):
+    source = tmp_path / "lab.tiff"
+    lab_bytes = ImageCms.ImageCmsProfile(ImageCms.createProfile("LAB")).tobytes()
+    lab_profile = ImageCms.ImageCmsProfile(io.BytesIO(lab_bytes))
+    srgb_profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB"))
+    with Image.new("LAB", (8, 9), (50, 128, 128)) as image:
+        expected = ImageCms.profileToProfile(
+            image, lab_profile, srgb_profile, outputMode="RGB"
+        )
+        expected_pixel = expected.getpixel((0, 0))
+        expected.close()
+        image.save(source, icc_profile=lab_bytes)
+
+    output = tmp_path / "out.pdf"
+    convert_to_pdf([source], output)
+
+    image_object = _pdf_image_object(output)
+    color_space = image_object["/ColorSpace"]
+    assert color_space[0] == "/ICCBased"
+    output_profile = color_space[1].get_object()
+    assert output_profile["/N"] == 3
+    extracted = next(iter(PdfReader(output).pages[0].images)).image.convert("RGB")
+    actual_pixel = extracted.getpixel((0, 0))
+    assert actual_pixel == pytest.approx(expected_pixel, abs=1)
+
+
+def test_invalid_icc_profile_skips_only_that_file(tmp_path):
+    invalid = tmp_path / "invalid.png"
+    with Image.new("RGB", (10, 10), "red") as image:
+        image.save(invalid, icc_profile=b"not an ICC profile")
+    valid = create_image(tmp_path / "valid.png")
+
+    result = convert_to_pdf([invalid, valid], tmp_path / "out.pdf")
+
+    assert result.page_count == 1
+    assert len(result.skipped) == 1
+    assert "ICCプロファイル" in result.skipped[0].reason
+
+
+def test_mismatched_icc_colorspace_is_not_silently_embedded(tmp_path):
+    mismatched = tmp_path / "mismatched.png"
+    lab_profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("LAB")).tobytes()
+    with Image.new("RGB", (10, 10), "red") as image:
+        image.save(mismatched, icc_profile=lab_profile)
+    valid = create_image(tmp_path / "valid.png")
+
+    result = convert_to_pdf([mismatched, valid], tmp_path / "out.pdf")
+
+    assert result.page_count == 1
+    assert len(result.skipped) == 1
+    assert "一致しません" in result.skipped[0].reason
+
+
+def test_png_dpi_source_is_reported(tmp_path):
+    source = tmp_path / "dpi.png"
+    with Image.new("RGB", (100, 200)) as image:
+        image.save(source, dpi=(300, 150))
+
+    with Image.open(source) as image:
+        dpi = resolve_dpi(image)
+
+    assert dpi.horizontal == pytest.approx(300, abs=0.1)
+    assert dpi.vertical == pytest.approx(150, abs=0.1)
+    assert dpi.source == "PNG pHYs"
+    assert not dpi.used_default
+
+
+def test_exif_centimetre_resolution_is_converted_to_dpi():
+    class ImageWithExif:
+        info = {}
+        format = "JPEG"
+
+        @staticmethod
+        def getexif():
+            return {282: (118, 1), 283: (59, 1), 296: 3}
+
+    dpi = resolve_dpi(ImageWithExif())
+
+    assert dpi.horizontal == pytest.approx(118 * 2.54)
+    assert dpi.vertical == pytest.approx(59 * 2.54)
+    assert dpi.source == "EXIF解像度タグ"
+    assert not dpi.used_default
+
+
+def test_jpeg_exif_resolution_preserves_distinct_axis_values(tmp_path):
+    source = tmp_path / "exif-dpi.jpg"
+    exif = Image.Exif()
+    exif[282] = 300
+    exif[283] = 150
+    exif[296] = 2
+    with Image.new("RGB", (80, 40)) as image:
+        image.save(source, exif=exif)
+
+    with Image.open(source) as image:
+        assert image.info["dpi"] == (300, 300)
+        dpi = resolve_dpi(image)
+
+    assert dpi.values == (300, 150)
+    assert dpi.source == "EXIF解像度タグ"
+
+
+def test_exif_rotation_swaps_anisotropic_dpi_and_preview_dimensions(tmp_path):
+    source = tmp_path / "rotated-exif-dpi.jpg"
+    exif = Image.Exif()
+    exif[274] = 6
+    exif[282] = 300
+    exif[283] = 150
+    exif[296] = 2
+    with Image.new("RGB", (80, 40)) as image:
+        image.save(source, exif=exif)
+
+    info = inspect_image(source)
+    output = tmp_path / "out.pdf"
+    convert_to_pdf([source], output)
+    page = PdfReader(output).pages[0]
+
+    assert (info.width, info.height) == (40, 80)
+    assert info.dpi.values == (150, 300)
+    assert float(page.mediabox.width) == pytest.approx(40 / 150 * 72, abs=0.01)
+    assert float(page.mediabox.height) == pytest.approx(80 / 300 * 72, abs=0.01)
+
+
+def test_tiff_without_resolution_uses_configured_default(tmp_path):
+    source = tmp_path / "no-resolution.tiff"
+    with Image.new("RGB", (50, 70)) as image:
+        image.save(source)
+
+    with Image.open(source) as image:
+        assert image.info["dpi"] == (1, 1)
+        dpi = resolve_dpi(image, default_dpi=240)
+
+    assert dpi.values == (240, 240)
+    assert dpi.used_default
+    assert dpi.source == "既定値 (240 DPI)"
+
+
+def test_custom_default_dpi_is_visible_and_used_for_missing_metadata(tmp_path):
+    source = create_image(tmp_path / "no-dpi.png", (600, 900))
+    info = inspect_image(source, default_dpi=240)
+    output = tmp_path / "out.pdf"
+    convert_to_pdf([source], output, options=ConversionOptions(default_dpi=240))
+
+    assert info.dpi.values == (240, 240)
+    assert info.dpi.used_default
+    assert info.dpi.source == "既定値 (240 DPI)"
+    page = PdfReader(output).pages[0]
+    assert float(page.mediabox.width) == pytest.approx(600 / 240 * 72, abs=0.01)
+    assert float(page.mediabox.height) == pytest.approx(900 / 240 * 72, abs=0.01)
+
+
+@pytest.mark.parametrize("dpi", [0, -1, 10001, float("nan"), float("inf")])
+def test_invalid_default_dpi_rejected(dpi):
+    with pytest.raises(ValueError, match="DPI"):
+        ConversionOptions(default_dpi=dpi).validate()

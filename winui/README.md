@@ -1,43 +1,57 @@
-# WinUI 3 frontend (preview)
+# WinUI 3 フロントエンド（正式版）
 
-This folder contains the first native Windows UI implementation. It is intentionally separate from the current Tkinter release until Windows builds and feature-parity checks pass.
+v2.1.0 から、このWinUI 3版が正式な画面です。Windows 11 の標準的な操作感に合わせ、画像の並べ替え、プレビュー、ドラッグ＆ドロップ、PDF変換の設定を1つの画面にまとめています。
 
-## Design direction
+## 設計方針
 
-- Use the standard WinUI 3 controls, Windows system typography, and theme-aware colors.
-- Keep the surface quiet and task-focused: clear headings, thin separators, one restrained accent action, and no gradients, glass effects, decorative badges, or stacked cards.
-- Keep the image queue and conversion controls visible together. Use native file/folder pickers and accept image drops from Explorer.
+- WinUI 3の標準コントロール、Windowsのシステムフォント、テーマに沿った色を使います。
+- 画面は落ち着いた作業向けの構成にし、装飾用のグラデーションや不要なカードは使いません。
+- 画像の一覧と変換の設定を同時に見られるようにします。エクスプローラーからの画像のドロップに対応します。
 
-## Architecture
+## 構成
 
-- `MainWindow.xaml` / `.xaml.cs`: WinUI presentation and Windows pickers.
-- `ViewModels/MainViewModel.cs`: file queue, filtering, folder sorting, and order changes.
-- `Services/ConversionWorkerService.cs`: keeps one resident Python worker alive (stdin JSONL requests, stdout JSONL responses multiplexed by request id), streams progress, and sends cooperative cancellation per request. The worker is assigned to a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so it cannot outlive the app, and it is restarted automatically if it exits unexpectedly.
-- `../../conversion_worker.py`: conversion engine adapter. Without arguments it serves newline-delimited JSON requests until stdin closes; `--request <file>` runs a single request and exits (used by tests and debugging). Thumbnail requests use Pillow too, including formats Windows may not preview natively.
+- `MainWindow.xaml` / `.xaml.cs`: 画面、Windowsのファイル選択・保存ダイアログ。
+- `ViewModels/MainViewModel.cs`: 画像一覧、検索による表示絞り込み、フォルダーの並び順、順番変更。
+- `Services/ConversionWorkerService.cs`: 変換ワーカーを1つだけ起動して使い回します（stdinにJSON Linesリクエスト、stdoutからリクエストID付きの応答を受信）。進捗を画面へ流し、リクエスト単位で協調キャンセルを送ります。ワーカーは `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` のJob Objectに割り当てるためアプリが異常終了しても残らず、予期せず終了した場合は自動で再起動します。
+- `Services/EmbeddedWorker.cs`: 単一EXEに埋め込んだ `ImageToPDFWorker.exe` を `%LOCALAPPDATA%\ImageToPDF\worker\<ビルドID>\` に展開します。
+- `Services/SelfTest.cs`: ビルド検証用の `--selftest-convert <入力画像> <出力PDF>` の処理です。通常の利用では使いません。
+- `../../conversion_worker.py`: JSONリクエストを受け取り、JSON Linesで結果を返す変換ワーカーです。既存の `image_processor.py` を使います。引数なしで起動するとstdinが閉じるまでリクエストを処理し続け、`--request <ファイル>` は1リクエストだけ処理して終了します（テスト・デバッグ用）。サムネイルもPillowで生成するため、Windowsがネイティブ表示できない形式にも対応します。
 
-The existing Tkinter application and CLI are left intact while this frontend is being validated.
+## 開発
 
-## Development
-
-Build and run on Windows 10/11 x64 with the .NET 8 SDK, Visual Studio 2022 MSBuild and Windows SDK tooling, Windows App SDK restore access, Python 3.10–3.12, and the repository's Python dependencies installed:
+Windows 10 / 11 x64 で、.NET 8 SDK、Visual Studio 2022 のMSBuild、Windows App SDKを復元できる環境、Python 3.10〜3.12 を用意します。
 
 ```powershell
 python -m pip install -r requirements-dev.txt -r requirements-optional.txt
 dotnet run --project .\winui\ImageToPDF.WinUI\ImageToPDF.WinUI.csproj -p:Platform=x64
 ```
 
-When `ImageToPDFWorker.exe` is not beside the app, the frontend looks up the repository's `conversion_worker.py` and runs it with `python` (or the executable named by `PYTHON`). This is intended for development only.
+`ImageToPDFWorker.exe` がないときは、リポジトリの `conversion_worker.py` を `python`（または環境変数 `PYTHON` で指定したPython）で実行します。これは開発用です。
 
-To create a self-contained WinUI folder and portable ZIP, run from PowerShell on Windows:
+## 単一EXEのビルド
+
+PowerShellで次を実行します。
 
 ```powershell
 .\build_winui.ps1
 ```
 
-The script builds a console-capable worker executable for redirected JSONL communication, publishes the WinUI app with the Windows App SDK self-contained, and packages the folder. The project explicitly includes its generated app `.pri` and compiled `.xbf` resources in the unpackaged publish output; a missing app PRI caused the first CI launch smoke test to exit with `0xC000027B`. The worker's console window is suppressed by the WinUI process launcher.
+スクリプトは次の順に進みます。
 
-## Validation status
+1. Pythonのテスト、ruffのチェック、バージョンの確認。
+2. PyInstallerで `dist\ImageToPDFWorker.exe` を作成し、変換を試します。
+3. MSBuildでWinUI版を `PublishSingleFile` の self-contained として発行します。ワーカーはEXE内に埋め込まれます。
+4. 発行されたファイルがEXE1つだけであることを確認します。
+5. `dist\ImageToPDF-v<version>-Windows-x64.exe` と `dist\SHA256SUMS.txt` を作成します。
+6. そのEXEを単独で一時フォルダーにコピーし、埋め込みワーカーによる日本語パスのPDF変換と、ウィンドウの起動を確認します。
 
-The repository sandbox has no .NET SDK and is not Windows, so it cannot validate the WinUI executable locally. Windows CI run [38526128543](https://github.com/burugou05-wq/PDF_conversion/actions/runs/38526128543) passed on the final packaging changes and uploaded `ImageToPDF-WinUI-Preview` (not an official release asset). It verifies x64 PE headers, self-contained .NET runtime files, the app PRI and XBF resources, ZIP entries and checksums, worker conversions with Japanese filenames from the build/published/extracted folders, and startup of the WinUI EXE from the extracted ZIP with the expected window title.
+ビルドにはWindowsと Windows App SDK の復元が必要です。CIは `windows-latest` で同じスクリプトを実行します。
 
-The CI launch smoke is a basic startup check, not a substitute for manual testing on a real Windows 11 machine. Keep Tkinter as the official Release until the WinUI runtime, Explorer drag-and-drop, AVIF/HEIF thumbnail fallback, cancellation, Unicode paths, and portable placement have been verified interactively on Windows 11.
+## 検証状況
+
+このリポジトリのLinux環境では .NET SDK がないため、WinUI版のコンパイルやEXEの動作は確認できません。検証はWindows CIで行います。
+
+- v2.1.0 の正式版は、Windows CIで単一EXEの発行、埋め込みワーカーによる変換、一時フォルダーからの起動確認まで行うことを条件にします。
+- 実機のWindows 11での手動確認（エクスプローラーからのドラッグ＆ドロップ、キャンセル、AVIF/HEIFのサムネイル、Unicodeパス、別端末での起動）は、リリース前の確認項目として残ります。
+
+CI はWinUIのウィンドウ表示を確認しますが、画面の操作性や見た目の確認を代替するものではありません。
