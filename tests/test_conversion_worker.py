@@ -69,6 +69,60 @@ def test_worker_generates_base64_preview_for_extended_formats(tmp_path):
         assert thumbnail.size == (32, 24)
 
 
+def test_worker_thumbnail_honours_the_requested_size(tmp_path):
+    source = tmp_path / "large.png"
+    with Image.new("RGB", (600, 400), "maroon") as image:
+        image.save(source)
+
+    completed, events = invoke_worker(
+        tmp_path,
+        {
+            "operation": "thumbnail",
+            "imagePaths": [str(source)],
+            "thumbnailSize": [150, 105],
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = events[-1]
+    assert result["type"] == "thumbnail"
+    with Image.open(BytesIO(base64.b64decode(result["data"]))) as thumbnail:
+        assert thumbnail.size == (150, 100)
+
+
+def test_worker_thumbnail_keeps_the_preview_size_without_a_request(tmp_path):
+    source = tmp_path / "large.png"
+    with Image.new("RGB", (900, 600), "teal") as image:
+        image.save(source)
+
+    completed, events = invoke_worker(
+        tmp_path,
+        {"operation": "thumbnail", "imagePaths": [str(source)]},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    with Image.open(BytesIO(base64.b64decode(events[-1]["data"]))) as thumbnail:
+        # 既定のプレビュー用ボックス（640×480）に収まり、タイル用より大きいこと。
+        assert thumbnail.size[0] <= 640
+        assert thumbnail.size[1] <= 480
+        assert thumbnail.size[0] > 400
+
+
+def test_worker_thumbnail_rejects_a_size_outside_the_supported_range(tmp_path):
+    source = tmp_path / "sample.png"
+    with Image.new("RGB", (32, 24), "navy") as image:
+        image.save(source)
+
+    for size in ([8, 105], [150], ["x", 105]):
+        completed, events = invoke_worker(
+            tmp_path,
+            {"operation": "thumbnail", "imagePaths": [str(source)], "thumbnailSize": size},
+        )
+        assert completed.returncode == 1, size
+        assert events[-1]["type"] == "error"
+        assert "サムネイル" in events[-1]["message"], events[-1]
+
+
 def test_worker_inspect_reports_size_dpi_and_icc(tmp_path):
     source = tmp_path / "details.png"
     with Image.new("RGB", (60, 90), "navy") as image:

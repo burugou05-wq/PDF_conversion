@@ -2,10 +2,11 @@
 
 Requests carry an ``operation``: ``convert`` (default) writes a PDF and emits
 ``progress`` events plus a terminal ``completed`` event, ``thumbnail`` answers
-with base64 PNG data, and ``inspect`` answers with the first frame's size, DPI
-provenance, frame count and ICC description. Every request is answered by
-exactly one terminal event (``completed`` / ``thumbnail`` / ``inspect`` /
-``cancelled`` / ``error``).
+with base64 PNG data sized by the optional ``thumbnailSize`` pair (default
+640x480), and ``inspect`` answers with the first frame's size, DPI provenance,
+frame count and ICC description. Every request is answered by exactly one
+terminal event (``completed`` / ``thumbnail`` / ``inspect`` / ``cancelled`` /
+``error``).
 
 One-shot mode (compatibility and debugging)::
 
@@ -46,6 +47,38 @@ from image_processor import (
 )
 
 LOGGER = logging.getLogger("ImageToPDF.Worker")
+
+#: Fallback box for ``thumbnail`` requests, matching the WinUI preview size.
+DEFAULT_THUMBNAIL_SIZE = (640, 480)
+MIN_THUMBNAIL_SIDE = 16
+MAX_THUMBNAIL_SIDE = 4096
+
+
+def thumbnail_size(request):
+    """Return the requested thumbnail box as ``(width, height)``.
+
+    The WinUI grid view asks for small tiles while the preview fallback asks
+    for a large one, so the box travels with the request instead of being
+    fixed in the worker.
+    """
+    values = request.get("thumbnailSize")
+    if not values:
+        return DEFAULT_THUMBNAIL_SIZE
+    if not isinstance(values, (list, tuple)) or len(values) != 2:
+        raise ValueError("サムネイル寸法は [幅, 高さ] の2要素で指定してください")
+    try:
+        width, height = (int(value) for value in values)
+    except (TypeError, ValueError):
+        raise ValueError("サムネイル寸法は整数で指定してください") from None
+    if not MIN_THUMBNAIL_SIDE <= width <= MAX_THUMBNAIL_SIDE:
+        raise ValueError(
+            f"サムネイル幅は{MIN_THUMBNAIL_SIDE}〜{MAX_THUMBNAIL_SIDE}で指定してください"
+        )
+    if not MIN_THUMBNAIL_SIDE <= height <= MAX_THUMBNAIL_SIDE:
+        raise ValueError(
+            f"サムネイル高さは{MIN_THUMBNAIL_SIDE}〜{MAX_THUMBNAIL_SIDE}で指定してください"
+        )
+    return width, height
 
 
 def trace(message):
@@ -98,7 +131,7 @@ def execute_request(request, cancel_event, emit):
         raise ValueError("画像が指定されていません")
 
     if operation == "thumbnail":
-        thumbnail = make_thumbnail(image_paths[0], (640, 480))
+        thumbnail = make_thumbnail(image_paths[0], thumbnail_size(request))
         try:
             with io.BytesIO() as buffer:
                 thumbnail.save(buffer, format="PNG")

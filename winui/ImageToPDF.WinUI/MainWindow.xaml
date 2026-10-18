@@ -14,6 +14,77 @@
         DragOver="Root_DragOver"
         Drop="Root_Drop"
         Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Border.Resources>
+            <!-- リスト表示とグリッド表示は、同じListViewの ItemsPanel と ItemTemplate を差し替えます。 -->
+            <ItemsPanelTemplate x:Key="ListPanel">
+                <ItemsStackPanel Orientation="Vertical" />
+            </ItemsPanelTemplate>
+            <ItemsPanelTemplate x:Key="GridPanel">
+                <ItemsWrapGrid Orientation="Horizontal" />
+            </ItemsPanelTemplate>
+            <DataTemplate x:Key="RowTemplate" x:DataType="models:ImageEntry">
+                <Border Padding="10,8">
+                    <Grid ColumnDefinitions="32,*,Auto" ColumnSpacing="12">
+                        <FontIcon
+                            Glyph="&#xE8B9;"
+                            VerticalAlignment="Center"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock
+                                Text="{x:Bind Name}"
+                                FontWeight="SemiBold"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                Text="{x:Bind ParentDirectory}"
+                                FontSize="12"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <TextBlock
+                            Grid.Column="2"
+                            Text="{x:Bind SizeText}"
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </Grid>
+                </Border>
+            </DataTemplate>
+            <DataTemplate x:Key="TileTemplate" x:DataType="models:ImageEntry">
+                <Grid Width="166" Padding="8,6" RowSpacing="6">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="105" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Border
+                            BorderThickness="1"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            CornerRadius="4" />
+                        <FontIcon
+                            Glyph="&#xE8B9;"
+                            FontSize="22"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Image
+                            Source="{x:Bind Thumbnail, Mode=OneWay}"
+                            Stretch="Uniform"
+                            Margin="3" />
+                    </Grid>
+                    <StackPanel Grid.Row="1" Spacing="2">
+                        <TextBlock
+                            Text="{x:Bind Name}"
+                            FontSize="12"
+                            TextTrimming="CharacterEllipsis" />
+                        <TextBlock
+                            Text="{x:Bind SizeText}"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </Grid>
+            </DataTemplate>
+        </Border.Resources>
         <Grid RowSpacing="18">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -71,7 +142,7 @@
 
         <Grid Grid.Row="2" ColumnDefinitions="*,360" ColumnSpacing="20">
             <Grid Grid.Column="0" RowDefinitions="Auto,*" RowSpacing="8">
-                <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6">
+                <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6">
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                         <TextBlock
                             Text="変換する画像"
@@ -108,45 +179,35 @@
                         Grid.Column="5"
                         Content="選択を削除"
                         Click="RemoveButton_Click" />
+                    <StackPanel
+                        Grid.Column="6"
+                        Orientation="Horizontal"
+                        Spacing="4"
+                        VerticalAlignment="Center">
+                        <ToggleButton
+                            x:Name="ListViewButton"
+                            Content="リスト"
+                            IsChecked="True"
+                            Click="ViewModeButton_Click"
+                            ToolTipService.ToolTip="ファイル名の一覧で表示します" />
+                        <ToggleButton
+                            x:Name="GridViewButton"
+                            Content="グリッド"
+                            Click="ViewModeButton_Click"
+                            ToolTipService.ToolTip="サムネイルを並べて表示します" />
+                    </StackPanel>
                 </Grid>
                 <Grid Grid.Row="1">
                     <ListView
                         x:Name="FilesList"
                         SelectionMode="Multiple"
                         ItemsSource="{x:Bind ViewModel.VisibleItems, Mode=OneWay}"
+                        ItemsPanel="{StaticResource ListPanel}"
+                        ItemTemplate="{StaticResource RowTemplate}"
                         SelectionChanged="FilesList_SelectionChanged"
+                        ContainerContentChanging="FilesList_ContainerContentChanging"
                         Background="Transparent"
-                        BorderThickness="0">
-                        <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="models:ImageEntry">
-                                <Border Padding="10,8">
-                                    <Grid ColumnDefinitions="32,*,Auto" ColumnSpacing="12">
-                                        <FontIcon
-                                            Glyph="&#xE8B9;"
-                                            VerticalAlignment="Center"
-                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                                            <TextBlock
-                                                Text="{x:Bind Name}"
-                                                FontWeight="SemiBold"
-                                                TextTrimming="CharacterEllipsis" />
-                                            <TextBlock
-                                                Text="{x:Bind ParentDirectory}"
-                                                FontSize="12"
-                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                TextTrimming="CharacterEllipsis" />
-                                        </StackPanel>
-                                        <TextBlock
-                                            Grid.Column="2"
-                                            Text="{x:Bind SizeText}"
-                                            VerticalAlignment="Center"
-                                            FontSize="12"
-                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
+                        BorderThickness="0" />
                     <StackPanel
                         x:Name="EmptyState"
                         HorizontalAlignment="Center"

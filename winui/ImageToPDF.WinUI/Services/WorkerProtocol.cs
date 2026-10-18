@@ -10,6 +10,12 @@ public sealed class WorkerRequest
 
     public bool Overwrite { get; init; }
 
+    /// <summary>
+    /// thumbnail要求時の最大寸法 [幅, 高さ]。空ならワーカーの既定値（640×480）。
+    /// グリッド表示のタイルは小さな寸法を要求してメモリを抑えます。
+    /// </summary>
+    public IReadOnlyList<int> ThumbnailSize { get; init; } = Array.Empty<int>();
+
     public WorkerOptions Options { get; init; } = new();
 }
 
