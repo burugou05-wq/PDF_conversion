@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from file_model import FileModel, list_images
+from file_model import FileModel, list_images, natural_key
 
 
 def test_search_selection_removes_the_selected_path():
@@ -63,3 +63,34 @@ def test_add_deduplicates_resolved_paths(tmp_path):
     model = FileModel()
     assert model.add([image, tmp_path]) == 1
     assert model.paths == [image.resolve()]
+
+
+def test_natural_key_tolerates_unicode_digit_lookalikes():
+    # "²".isdigit() is True but int("²") raises; the key must not crash on it.
+    assert natural_key("².jpg") == ((0, "².jpg"),)
+    assert natural_key("a²3.png") == ((0, "a²"), (1, 3), (0, ".png"))
+
+
+def test_list_images_natural_sort_with_unicode_digits(tmp_path):
+    (tmp_path / "a².jpg").touch()
+    (tmp_path / "a2.jpg").touch()
+    names = [path.name for path in list_images(tmp_path, "number")]
+    assert names == ["a2.jpg", "a².jpg"]
+
+
+def test_date_sort_breaks_ties_by_ascending_name(tmp_path):
+    for name in ("b.png", "a.png", "c.png"):
+        path = tmp_path / name
+        path.touch()
+        import os
+
+        os.utime(path, (1700000000, 1700000000))
+    names = [path.name for path in list_images(tmp_path, "date")]
+    assert names == ["a.png", "b.png", "c.png"]
+
+
+def test_jfif_and_jpe_extensions_are_supported(tmp_path):
+    for name in ("image.jfif", "image.jpe", "image.jpg"):
+        (tmp_path / name).touch()
+    names = {path.name for path in list_images(tmp_path)}
+    assert names == {"image.jfif", "image.jpe", "image.jpg"}

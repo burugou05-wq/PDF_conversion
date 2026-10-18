@@ -1,21 +1,41 @@
 """Headless conversion with explicit PDF geometry and atomic output."""
 
 import errno
+import io
 import logging
 import math
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import img2pdf
-from PIL import Image, ImageOps
+from PIL import Image, ImageCms, ImageOps
 from pypdf import PdfWriter
+from pypdf.generic import ArrayObject, DecodedStreamObject, NameObject, NumberObject
+
+from app_config import VERSION
 
 LOGGER = logging.getLogger(__name__)
 PAGE_SIZES_MM = {"A4": (210.0, 297.0), "A3": (297.0, 420.0), "Letter": (215.9, 279.4)}
 DEFAULT_DPI = 96.0
 MM_TO_PT = 72.0 / 25.4
+# Formats whose compressed data img2pdf can embed into a PDF unchanged.
+NATIVE_EMBED_FORMATS = frozenset({"JPEG", "MPO", "PNG"})
+# Resolved at import time; tests override this to exercise the Windows path.
+WINDOWS = os.name == "nt"
+# Resource failures are not recoverable by skipping an image or retrying.
+RESOURCE_ERRNOS = {
+    errno.ENOSPC,
+    errno.EACCES,
+    errno.EPERM,
+    errno.EROFS,
+    errno.EMFILE,
+    errno.ENFILE,
+    errno.EIO,
+}
+_SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB"))
+_SRGB_ICC_PROFILE = _SRGB_PROFILE.tobytes()
 
 
 def register_image_plugins():
@@ -47,6 +67,7 @@ class ConversionOptions:
     auto_rotate: bool = True
     compact_dpi: int = 150
     jpeg_quality: int = 85
+    default_dpi: float = DEFAULT_DPI
 
     def validate(self):
         if self.quality not in {"original", "compact"}:
@@ -63,6 +84,29 @@ class ConversionOptions:
             raise ValueError("背景色が不正です")
         if not 36 <= self.compact_dpi <= 600 or not 1 <= self.jpeg_quality <= 100:
             raise ValueError("圧縮設定が不正です")
+        if not math.isfinite(self.default_dpi) or not 1 <= self.default_dpi <= 10000:
+            raise ValueError("DPI不明時の既定値は1〜10000で指定してください")
+
+
+@dataclass(frozen=True)
+class DpiInfo:
+    horizontal: float
+    vertical: float
+    source: str
+    used_default: bool = False
+
+    @property
+    def values(self):
+        return self.horizontal, self.vertical
+
+
+@dataclass(frozen=True)
+class ImageInfo:
+    width: int
+    height: int
+    frame_count: int
+    dpi: DpiInfo
+    icc_profile: str
 
 
 @dataclass(frozen=True)
@@ -83,19 +127,146 @@ def check_cancel(cancel_event):
         raise ConversionCancelled("変換をキャンセルしました")
 
 
-def normalize_dpi(value):
+def _valid_dpi_pair(value):
     try:
         horizontal, vertical = map(float, value)
         if all(math.isfinite(item) and 1 <= item <= 10000 for item in (horizontal, vertical)):
             return horizontal, vertical
     except (TypeError, ValueError, OverflowError):
         pass
-    return DEFAULT_DPI, DEFAULT_DPI
+    return None
+
+
+def normalize_dpi(value, default_dpi=DEFAULT_DPI):
+    """Return a validated DPI pair, falling back to the caller-visible default."""
+    pair = _valid_dpi_pair(value)
+    if pair is not None:
+        return pair
+    return float(default_dpi), float(default_dpi)
+
+
+def _rational_number(value):
+    try:
+        if isinstance(value, (tuple, list)) and len(value) == 2:
+            numerator, denominator = map(float, value)
+            if denominator == 0:
+                return None
+            number = numerator / denominator
+        else:
+            number = float(value)
+        if math.isfinite(number) and number > 0:
+            return number
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+        pass
+    return None
+
+
+def _resolution_from_tags(tags, source):
+    if tags is None:
+        return None
+    horizontal = _rational_number(tags.get(282))
+    vertical = _rational_number(tags.get(283))
+    if horizontal is None or vertical is None:
+        return None
+    raw_unit = tags.get(296)
+    unit = 2 if raw_unit is None else _rational_number(raw_unit)
+    if unit is None:
+        return None
+    unit = round(unit)
+    if unit == 2:
+        multiplier = 1.0
+    elif unit == 3:
+        multiplier = 2.54  # pixels per centimetre -> pixels per inch
+    else:
+        return None
+    pair = _valid_dpi_pair((horizontal * multiplier, vertical * multiplier))
+    return (pair, source) if pair is not None else None
+
+
+def resolve_dpi(image, default_dpi=DEFAULT_DPI):
+    """Resolve DPI from format metadata or EXIF/TIFF tags and expose its origin."""
+    try:
+        exif = image.getexif()
+    except (AttributeError, OSError, ValueError):
+        exif = None
+    tags = getattr(image, "tag_v2", None)
+
+    # Prefer explicit EXIF resolution on JPEGs; Pillow may expose a rounded or
+    # synthesized pair through info['dpi'] when EXIF has different X/Y values.
+    if image.format == "JPEG":
+        result = _resolution_from_tags(exif, "EXIF解像度タグ")
+        if result is not None:
+            pair, source = result
+            return DpiInfo(*pair, source)
+
+    if image.format == "TIFF":
+        result = _resolution_from_tags(tags, "TIFF解像度タグ")
+        if result is None:
+            result = _resolution_from_tags(exif, "EXIF解像度タグ")
+        if result is not None:
+            pair, source = result
+            return DpiInfo(*pair, source)
+
+    pair = _valid_dpi_pair(image.info.get("dpi"))
+    if image.format == "TIFF" and pair == (1.0, 1.0):
+        # Pillow synthesizes (1, 1) for some TIFFs with no resolution tags.
+        has_resolution_tags = tags is not None and (282 in tags or 283 in tags)
+        if not has_resolution_tags:
+            pair = None
+    if pair is not None:
+        source = {
+            "JPEG": "JPEG/JFIF",
+            "PNG": "PNG pHYs",
+            "TIFF": "TIFF解像度タグ",
+        }.get(image.format, "画像メタデータ")
+        return DpiInfo(*pair, source)
+
+    result = _resolution_from_tags(exif, "EXIF解像度タグ")
+    if result is None:
+        result = _resolution_from_tags(tags, "TIFF解像度タグ")
+    if result is not None:
+        pair, source = result
+        return DpiInfo(*pair, source)
+
+    fallback = float(default_dpi)
+    return DpiInfo(fallback, fallback, f"既定値 ({fallback:g} DPI)", used_default=True)
+
+
+def _profile_description(profile_bytes, mode):
+    if not profile_bytes:
+        if mode == "CMYK":
+            return "なし（CMYKの色解釈は出力環境依存）"
+        return "なし（未タグのRGB画像はsRGBと仮定）"
+    try:
+        profile = ImageCms.ImageCmsProfile(io.BytesIO(profile_bytes))
+        description = ImageCms.getProfileDescription(profile).strip()
+        return f"埋め込み: {description or 'ICCプロファイル'}"
+    except (ImageCms.PyCMSError, OSError, ValueError, TypeError):
+        return "埋め込み（読み込み不可）"
+
+
+def inspect_image(path, default_dpi=DEFAULT_DPI):
+    """Read first-frame dimensions, DPI provenance, and embedded ICC description."""
+    with Image.open(path) as source:
+        source.seek(0)
+        width, height = source.size
+        dpi = resolve_dpi(source, default_dpi)
+        orientation = source.getexif().get(274, 1)
+        if orientation in {5, 6, 7, 8}:
+            width, height = height, width
+            dpi = replace(dpi, horizontal=dpi.vertical, vertical=dpi.horizontal)
+        return ImageInfo(
+            width=width,
+            height=height,
+            frame_count=getattr(source, "n_frames", 1),
+            dpi=dpi,
+            icc_profile=_profile_description(source.info.get("icc_profile"), source.mode),
+        )
 
 
 def page_geometry(width, height, dpi, options):
     """Return page and image sizes in points, independently of pixel resolution."""
-    horizontal, vertical = normalize_dpi(dpi)
+    horizontal, vertical = normalize_dpi(dpi, options.default_dpi)
     image_width = width * 72.0 / horizontal
     image_height = height * 72.0 / vertical
     margin = options.margin_mm * MM_TO_PT
@@ -110,12 +281,132 @@ def page_geometry(width, height, dpi, options):
     return page_width, page_height, image_width * scale, image_height * scale
 
 
+def _make_layout_fun(geometry, options):
+    """Answer layout queries with the pre-computed geometry for each frame.
+
+    If img2pdf reports an unexpected number of pages (for example when it
+    splits an embedded file internally), recompute the geometry from the
+    reported pixel size and DPI instead of failing with StopIteration.
+    """
+    layouts = iter(geometry)
+
+    def layout_fun(imgwidthpx, imgheightpx, ndpi):
+        try:
+            return next(layouts)
+        except StopIteration:
+            LOGGER.warning(
+                "img2pdf requested more page layouts than prepared; recomputing from %sx%s px",
+                imgwidthpx,
+                imgheightpx,
+            )
+            return page_geometry(imgwidthpx, imgheightpx, ndpi, options)
+
+    return layout_fun
+
+
+def _has_alpha(image):
+    return image.mode in {"RGBA", "LA", "PA"} or "transparency" in image.info
+
+
+def _frame_count(source):
+    """Number of frames to convert.
+
+    Multi-Picture (MPO) JPEGs from cameras and phones carry extra frames such
+    as embedded preview thumbnails; only the primary image becomes a page.
+    """
+    if source.format == "MPO":
+        return 1
+    return getattr(source, "n_frames", 1)
+
+
+def _can_embed_directly(source, frame_count, options):
+    """Header-only test: can img2pdf embed this file's pixels unchanged?
+
+    Requires a single upright frame without transparency. JPEG and PNG are
+    embedded verbatim, MPO photos contribute only their primary frame, and
+    CCITT Group 4 TIFF scans keep their compressed fax data. Everything else
+    is decoded and re-encoded by :func:`_convert_frames`.
+    """
+    if frame_count != 1 or options.quality != "original":
+        return False
+    if source.getexif().get(274, 1) != 1:
+        return False
+    if _has_alpha(source):
+        return False
+    if source.format in NATIVE_EMBED_FORMATS:
+        return True
+    return (
+        source.format == "TIFF"
+        and source.mode == "1"
+        and source.info.get("compression") == "group4"
+    )
+
+
+def _valid_icc_for_output(mode, icc):
+    """Keep ICC profiles that match the output color mode; drop the others.
+
+    A profile whose color space disagrees with the pixel data (an RGB profile
+    on grayscale output, for instance) produces inconsistent PDF images, so
+    the profile is verified before it is attached to a re-encoded frame.
+    """
+    if not icc:
+        return None
+    expected = {"RGB": "RGB", "L": "GRAY"}.get(mode)
+    if expected is None:
+        return None
+    try:
+        profile = ImageCms.ImageCmsProfile(io.BytesIO(icc)).profile
+        # ICC signatures are four bytes ("RGB ", "GRAY"); lcms keeps padding.
+        if (profile.xcolor_space or "").strip() == expected:
+            return icc
+        LOGGER.warning("Dropping %s ICC profile from %s output", profile.xcolor_space, mode)
+    except Exception:
+        LOGGER.warning("Ignoring unreadable ICC profile", exc_info=True)
+    return None
+
+
+def _convert_cmyk_to_rgb(image):
+    """Convert CMYK pixels to sRGB, honoring the embedded ICC profile.
+
+    Pillow's plain ``convert("RGB")`` ignores color management, which shifts
+    the colors of print-ready scans. When the image carries a CMYK profile it
+    is converted with LittleCMS instead; the result is tagged as sRGB.
+
+    Returns ``(image, icc_profile_bytes)`` where the profile may be None when
+    the conversion fell back to the simple transform.
+    """
+    profile = image.info.get("icc_profile")
+    if profile:
+        try:
+            source_profile = ImageCms.ImageCmsProfile(io.BytesIO(profile))
+            converted = ImageCms.profileToProfile(
+                image, source_profile, _SRGB_PROFILE, outputMode="RGB"
+            )
+            return converted, _SRGB_ICC_PROFILE
+        except Exception:
+            LOGGER.warning(
+                "ICC-based CMYK conversion failed; using simple conversion", exc_info=True
+            )
+    return image.convert("RGB"), None
+
+
 def flatten_image(image, color):
+    """Composite transparency onto the background color.
+
+    Grayscale and bilevel images keep their mode so scanned documents stay
+    small; everything else becomes RGB. The result is always a new image.
+    """
+    if not _has_alpha(image):
+        if image.mode in {"1", "L", "RGB"}:
+            return image.copy()
+        return image.convert("RGB")
     rgba = image.convert("RGBA")
     background = Image.new("RGBA", rgba.size, (*color, 255))
     try:
         composited = Image.alpha_composite(background, rgba)
         try:
+            if image.mode in {"1", "L", "LA"}:
+                return composited.convert("L")
             return composited.convert("RGB")
         finally:
             composited.close()
@@ -124,70 +415,296 @@ def flatten_image(image, color):
         background.close()
 
 
+def _load_icc_profile(profile_bytes):
+    try:
+        return ImageCms.ImageCmsProfile(io.BytesIO(profile_bytes))
+    except (ImageCms.PyCMSError, OSError, ValueError, TypeError) as error:
+        raise ValueError(f"ICCプロファイルを読み込めません: {error}") from error
+
+
+def to_srgb(image, bg_color=(255, 255, 255)):
+    """Convert a frame to 8-bit sRGB, honoring any embedded ICC profile."""
+    owned = []
+
+    def keep(value):
+        owned.append(value)
+        return value
+
+    try:
+        has_alpha = image.mode in {"RGBA", "LA", "PA", "RGBa", "La"} or (
+            "transparency" in image.info
+        )
+        alpha = None
+        if image.mode in {"LA", "La"}:
+            rgba = keep(image.convert("RGBA"))
+            alpha = keep(rgba.getchannel("A"))
+            color_image = keep(image.getchannel("L"))
+        elif has_alpha:
+            rgba = keep(image.convert("RGBA"))
+            alpha = keep(rgba.getchannel("A"))
+            if image.mode in {"1", "L"} or image.mode.startswith("I"):
+                color_image = keep(image.convert("L"))
+            else:
+                color_image = keep(rgba.convert("RGB"))
+        elif image.mode in {"RGB", "CMYK", "L", "LAB", "XYZ"}:
+            color_image = image
+        elif image.mode == "1" or image.mode.startswith("I"):
+            color_image = keep(image.convert("L"))
+        else:
+            color_image = keep(image.convert("RGB"))
+
+        profile_bytes = image.info.get("icc_profile")
+        if profile_bytes:
+            source_profile = _load_icc_profile(profile_bytes)
+            try:
+                converted = ImageCms.profileToProfile(
+                    color_image,
+                    source_profile,
+                    _SRGB_PROFILE,
+                    renderingIntent=ImageCms.Intent.PERCEPTUAL,
+                    outputMode="RGB",
+                )
+            except (ImageCms.PyCMSError, OSError, ValueError) as error:
+                raise ValueError(f"ICC色変換に失敗しました: {error}") from error
+            if converted is None:
+                raise ValueError("ICC色変換に失敗しました")
+            converted = keep(converted)
+        else:
+            if image.mode == "CMYK":
+                LOGGER.warning("Untagged CMYK image is converted using Pillow's default conversion")
+            converted = keep(color_image.convert("RGB"))
+
+        if alpha is None:
+            return converted.copy()
+        rgba = keep(converted.convert("RGBA"))
+        rgba.putalpha(alpha)
+        return flatten_image(rgba, bg_color)
+    finally:
+        for item in reversed(owned):
+            item.close()
+
+
+def _validate_embedded_icc(image):
+    profile_bytes = image.info.get("icc_profile")
+    if not profile_bytes:
+        return
+    profile = _load_icc_profile(profile_bytes)
+    mode = image.mode
+    expected_space = (
+        "CMYK"
+        if mode == "CMYK"
+        else "Lab"
+        if mode == "LAB"
+        else "XYZ"
+        if mode == "XYZ"
+        else "GRAY"
+        if mode in {"1", "L", "LA", "La", "I", "I;16", "I;16B", "I;16L"}
+        else "RGB"
+        if mode in {"RGB", "RGBA", "RGBa", "P", "PA"}
+        else None
+    )
+    actual_space = profile.profile.xcolor_space.strip()
+    if expected_space is not None and actual_space.casefold() != expected_space.casefold():
+        raise ValueError(
+            f"ICC色空間({actual_space})と画像モード({mode})が一致しません"
+        )
+
+
+def _tag_unprofiled_rgb_images(writer):
+    """Make the standard sRGB assumption explicit for untagged DeviceRGB images."""
+    targets = []
+    for page in writer.pages:
+        resources = page.get("/Resources")
+        if resources is None:
+            continue
+        xobjects = resources.get_object().get("/XObject")
+        if xobjects is None:
+            continue
+        for reference in xobjects.values():
+            image = reference.get_object()
+            if image.get("/Subtype") == "/Image" and image.get("/ColorSpace") == NameObject(
+                "/DeviceRGB"
+            ):
+                targets.append(image)
+    if not targets:
+        return
+
+    profile = DecodedStreamObject()
+    profile.set_data(_SRGB_ICC_PROFILE)
+    profile.update(
+        {
+            NameObject("/N"): NumberObject(3),
+            NameObject("/Alternate"): NameObject("/DeviceRGB"),
+        }
+    )
+    profile_reference = writer._add_object(profile)
+    for image in targets:
+        image[NameObject("/ColorSpace")] = ArrayObject(
+            [NameObject("/ICCBased"), profile_reference]
+        )
+
+
 def make_thumbnail(path, size=(240, 200)):
     """Return a PIL image; only the UI thread creates Tk objects."""
     with Image.open(path) as source:
+        # JPEG decoders can scale while decoding (DCT scaling). Requesting
+        # about twice the target size keeps enough detail for the final
+        # LANCZOS shrink while decoding a fraction of the pixel data.
+        source.draft(source.mode, (size[0] * 2, size[1] * 2))
         oriented = ImageOps.exif_transpose(source)
         try:
-            thumbnail = flatten_image(oriented, (245, 245, 245))
+            thumbnail = to_srgb(oriented, (245, 245, 245))
             thumbnail.thumbnail(size, Image.Resampling.LANCZOS)
             return thumbnail
         finally:
             oriented.close()
 
 
-def _convert_file(path, directory, options, cancel_event):
-    embedded = []
-    geometry = []
-    with Image.open(path) as source:
-        frame_count = getattr(source, "n_frames", 1)
-        for frame_index in range(frame_count):
-            check_cancel(cancel_event)
-            source.seek(frame_index)
-            source.load()
-            dpi = normalize_dpi(source.info.get("dpi"))
-            orientation = source.getexif().get(274, 1)
-            image = ImageOps.exif_transpose(source)
-            try:
-                if orientation in {5, 6, 7, 8}:
-                    dpi = dpi[::-1]
-                layout = page_geometry(*image.size, dpi, options)
-                geometry.append(layout)
-                has_alpha = image.mode in {"RGBA", "LA", "PA"} or "transparency" in image.info
-                native = (
-                    frame_count == 1
-                    and source.format in {"JPEG", "PNG"}
-                    and orientation == 1
-                    and not has_alpha
-                    and options.quality == "original"
-                )
-                if native:
-                    embedded.append(str(path))
-                    continue
-                frame_path = directory / f"frame-{frame_index}.png"
-                rgb = flatten_image(image, options.bg_color)
-                try:
-                    if options.quality == "compact":
-                        frame_path = frame_path.with_suffix(".jpg")
-                        maximum = (
-                            max(1, round(layout[2] / 72 * options.compact_dpi)),
-                            max(1, round(layout[3] / 72 * options.compact_dpi)),
-                        )
-                        rgb.thumbnail(maximum, Image.Resampling.LANCZOS)
-                        rgb.save(frame_path, "JPEG", quality=options.jpeg_quality, subsampling=0)
-                    else:
-                        rgb.save(frame_path, "PNG", compress_level=3)
-                    embedded.append(str(frame_path))
-                finally:
-                    rgb.close()
-            finally:
-                image.close()
+def _save_frame(image, frame_path, dpi, icc, options):
+    if options.quality != "compact":
+        image.save(frame_path, "PNG", compress_level=3, dpi=dpi, icc_profile=icc)
+        return
+    if image.mode == "1":
+        # JPEG has no bilevel mode; fall back to 8-bit grayscale.
+        converted = image.convert("L")
+        try:
+            converted.save(
+                frame_path,
+                "JPEG",
+                quality=options.jpeg_quality,
+                subsampling=0,
+                dpi=dpi,
+                icc_profile=icc,
+            )
+        finally:
+            converted.close()
+    else:
+        image.save(
+            frame_path,
+            "JPEG",
+            quality=options.jpeg_quality,
+            subsampling=0,
+            dpi=dpi,
+            icc_profile=icc,
+        )
+
+
+def _embed_source_directly(path, source, directory, options, cancel_event):
+    """Write a single-page PDF without decoding the image pixels."""
     check_cancel(cancel_event)
-    layouts = iter(geometry)
+    dpi = resolve_dpi(source, options.default_dpi).values
+    geometry = [page_geometry(source.width, source.height, dpi, options)]
+    keywords = {"first_frame_only": True} if source.format == "MPO" else {}
     pdf_path = directory / "image.pdf"
     with pdf_path.open("wb") as output:
-        img2pdf.convert(embedded, layout_fun=lambda *args: next(layouts), outputstream=output)
+        img2pdf.convert(
+            str(path),
+            layout_fun=_make_layout_fun(geometry, options),
+            outputstream=output,
+            **keywords,
+        )
     return pdf_path
+
+
+def _convert_frames(source, frame_count, directory, options, cancel_event):
+    """Decode every frame and re-encode it as PNG (or JPEG in compact mode)."""
+    embedded = []
+    geometry = []
+    for frame_index in range(frame_count):
+        check_cancel(cancel_event)
+        source.seek(frame_index)
+        source.load()
+        _validate_embedded_icc(source)
+        dpi = resolve_dpi(source, options.default_dpi).values
+        orientation = source.getexif().get(274, 1)
+        image = ImageOps.exif_transpose(source)
+        converted = None
+        try:
+            if orientation in {5, 6, 7, 8}:
+                dpi = dpi[::-1]
+            layout = page_geometry(*image.size, dpi, options)
+            geometry.append(layout)
+            if image.mode == "CMYK":
+                converted, icc = _convert_cmyk_to_rgb(image)
+            elif image.mode not in {"1", "L", "LA", "RGB", "RGBA", "P", "PA"}:
+                # LAB/XYZ and other exotic modes need a color-managed
+                # transform; plain convert("RGB") would shift the colors.
+                converted = to_srgb(image, options.bg_color)
+                icc = _SRGB_ICC_PROFILE
+            else:
+                icc = image.info.get("icc_profile")
+            pixels = converted if converted is not None else image
+            frame_path = directory / f"frame-{frame_index}.png"
+            flattened = flatten_image(pixels, options.bg_color)
+            try:
+                icc = _valid_icc_for_output(flattened.mode, icc)
+                if options.quality == "compact":
+                    frame_path = frame_path.with_suffix(".jpg")
+                    maximum = (
+                        max(1, round(layout[2] / 72 * options.compact_dpi)),
+                        max(1, round(layout[3] / 72 * options.compact_dpi)),
+                    )
+                    flattened.thumbnail(maximum, Image.Resampling.LANCZOS)
+                _save_frame(flattened, frame_path, dpi, icc, options)
+                embedded.append(str(frame_path))
+            finally:
+                flattened.close()
+        finally:
+            if converted is not None:
+                converted.close()
+            image.close()
+    check_cancel(cancel_event)
+    pdf_path = directory / "image.pdf"
+    with pdf_path.open("wb") as output:
+        img2pdf.convert(
+            embedded, layout_fun=_make_layout_fun(geometry, options), outputstream=output
+        )
+    return pdf_path
+
+
+def _convert_file(path, directory, options, cancel_event):
+    """Build one single-file PDF, embedding the original data when possible."""
+    with Image.open(path) as source:
+        _validate_embedded_icc(source)
+        frame_count = _frame_count(source)
+        if _can_embed_directly(source, frame_count, options):
+            try:
+                return _embed_source_directly(path, source, directory, options, cancel_event)
+            except (ConversionCancelled, MemoryError):
+                raise
+            except Exception as error:
+                if isinstance(error, OSError) and error.errno in RESOURCE_ERRNOS:
+                    raise
+                # img2pdf refused the direct embedding (for example an
+                # unusual TIFF structure); fall back to decoding the pixels.
+                LOGGER.info("Direct embedding failed for %s (%s); re-encoding", path, error)
+        return _convert_frames(source, frame_count, directory, options, cancel_event)
+
+
+def _unlink_quietly(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        # The output is already published; a staging file that cannot be
+        # removed must not turn a successful save into a reported failure.
+        LOGGER.warning("PDFを公開しましたが、一時ファイルを削除できませんでした: %s", path)
+
+
+def _publish_output(staging, output, overwrite):
+    """Publish the finished PDF without ever truncating an existing file."""
+    if overwrite:
+        os.replace(staging, output)
+        return
+    if WINDOWS:
+        # Windows rename refuses to replace an existing destination, so it
+        # offers the same no-clobber guarantee as a hard link while also
+        # working on exFAT/FAT32 volumes such as USB sticks and SD cards.
+        os.rename(staging, output)
+        return
+    # POSIX rename would silently replace the destination, so publish through
+    # a hard link, which fails atomically if the output already exists.
+    os.link(staging, output)
+    _unlink_quietly(staging)
 
 
 def convert_to_pdf(
@@ -227,15 +744,7 @@ def convert_to_pdf(
                     raise
                 except Exception as error:
                     # Resource failures are not recoverable by skipping an image.
-                    if isinstance(error, OSError) and error.errno in {
-                        errno.ENOSPC,
-                        errno.EACCES,
-                        errno.EPERM,
-                        errno.EROFS,
-                        errno.EMFILE,
-                        errno.ENFILE,
-                        errno.EIO,
-                    }:
+                    if isinstance(error, OSError) and error.errno in RESOURCE_ERRNOS:
                         raise
                     LOGGER.warning("Skipped %s", path, exc_info=True)
                     skipped.append(SkippedFile(path, str(error) or type(error).__name__))
@@ -247,7 +756,8 @@ def convert_to_pdf(
                 details = "\n".join(f"{item.path.name}: {item.reason}" for item in skipped[:5])
                 raise ValueError("変換できる画像がありません\n" + details)
             check_cancel(cancel_event)
-            writer.add_metadata({"/Producer": "Image to PDF 2.0"})
+            _tag_unprofiled_rgb_images(writer)
+            writer.add_metadata({"/Producer": f"Image to PDF {VERSION}"})
             descriptor, name = tempfile.mkstemp(
                 prefix=".img2pdf-", suffix=".tmp", dir=output.parent
             )
@@ -257,12 +767,7 @@ def convert_to_pdf(
                 stream.flush()
                 os.fsync(stream.fileno())
             check_cancel(cancel_event)
-            if overwrite:
-                os.replace(staging, output)
-            else:
-                # Publishing with a hard link prevents concurrent overwrite.
-                os.link(staging, output)
-                staging.unlink()
+            _publish_output(staging, output, overwrite)
             staging = None
             result = ConversionResult(output, len(writer.pages), tuple(skipped))
         if progress_cb:

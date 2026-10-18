@@ -6,6 +6,7 @@ import queue
 import subprocess
 import sys
 import threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -13,6 +14,12 @@ from app_config import APP_NAME, VERSION
 from app_paths import log_directory
 from file_model import FileModel, list_images
 from ui_theme import COLORS, apply_theme
+
+# Kept for tests and diagnostics; holds the running Application instance.
+LAST_APPLICATION = None
+
+# Japanese display labels for the folder-mode sort orders.
+SORT_ORDERS = {"名前": "name", "番号順": "number", "更新日": "date"}
 
 
 def set_dpi_aware():
@@ -59,9 +66,11 @@ def main():
         from PIL import ImageTk
 
         from image_processor import (
+            DEFAULT_DPI,
             ConversionCancelled,
             ConversionOptions,
             convert_to_pdf,
+            inspect_image,
             make_thumbnail,
         )
     except ImportError as error:
@@ -80,7 +89,17 @@ def main():
 
         root = TkinterDnD.Tk()
         has_dnd = True
-    except (ImportError, tk.TclError):
+    except (ImportError, tk.TclError, RuntimeError) as error:
+        # tkinterdnd2 re-raises Tcl-level load failures (including transient
+        # ones) as RuntimeError; drag-and-drop is optional, so fall back to a
+        # plain Tk root instead of crashing.
+        logging.warning("Drag-and-drop unavailable; using file dialog: %s", error)
+        partial_root = getattr(tk, "_default_root", None)
+        if partial_root is not None:
+            try:
+                partial_root.destroy()
+            except tk.TclError:
+                pass
         root = tk.Tk()
         has_dnd = False
 
@@ -91,27 +110,34 @@ def main():
             self.root = root
             self.model = FileModel()
             self.folder = None
+            # Cached listing of the folder mode; refreshed only on explicit
+            # reloads so typing in the search box never rescans the directory.
+            self.folder_listing = []
+            self.folder_listed_for = None
             self.events = queue.Queue()
             self.cancel_event = threading.Event()
             self.worker = None
             self.closing = False
             self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="preview")
             self.preview_generation = 0
+            self.preview_path = None
             self.pending_thumbnails = set()
-            self.thumbnail_cache = {}
+            self.thumbnail_cache = OrderedDict()
             self.grid_page = 0
             self.grid_selection = set()
             self.grid_anchor = None
             self.grid_cells = {}
             self.visible = []
             self.busy = False
+            self.drag_saved_selection = None
             self.query = tk.StringVar()
             self.output = tk.StringVar()
             self.view = tk.StringVar(value="list")
-            self.sort = tk.StringVar(value="name")
+            self.sort = tk.StringVar(value="名前")
             self.quality = tk.StringVar(value="original")
             self.paper = tk.StringVar(value="元のサイズ")
             self.margin = tk.StringVar(value="0")
+            self.default_dpi = tk.StringVar(value=str(int(DEFAULT_DPI)))
             self.background = tk.StringVar(value="白")
             self.rotate = tk.BooleanVar(value=True)
             self.open_after = tk.BooleanVar(value=False)
@@ -121,6 +147,7 @@ def main():
             root.minsize(800, 640)
             self.build()
             self.query.trace_add("write", lambda *_: self.refresh())
+            self.default_dpi.trace_add("write", self.default_dpi_changed)
             root.protocol("WM_DELETE_WINDOW", self.close)
             root.after(80, self.poll)
 
@@ -161,7 +188,7 @@ def main():
                 textvariable=self.sort,
                 state="readonly",
                 width=10,
-                values=("name", "number", "date"),
+                values=tuple(SORT_ORDERS),
             )
             order.pack(side="left")
             order.bind("<<ComboboxSelected>>", lambda _: self.reload_folder())
@@ -244,7 +271,7 @@ def main():
             options = ttk.LabelFrame(root, text="変換設定", padding=8)
             options.pack(fill="x", padx=12, pady=6)
             for value, label in [
-                ("original", "元画質優先（再圧縮なし）"),
+                ("original", "元画質優先（可能なら元データを保持）"),
                 ("compact", "軽量化（150dpi / JPEG品質85）"),
             ]:
                 ttk.Radiobutton(options, text=label, variable=self.quality, value=value).pack(
@@ -275,6 +302,15 @@ def main():
             ttk.Checkbutton(settings, text="完了後に開く", variable=self.open_after).pack(
                 side="left"
             )
+            dpi_settings = ttk.Frame(root, padding=(12, 3))
+            dpi_settings.pack(fill="x")
+            ttk.Label(dpi_settings, text="DPI不明時の既定値:").pack(side="left")
+            ttk.Entry(dpi_settings, textvariable=self.default_dpi, width=7).pack(
+                side="left", padx=4
+            )
+            ttk.Label(dpi_settings, text="dpi（1〜10000。取得元はプレビューに表示）", style="Sub.TLabel").pack(
+                side="left"
+            )
             destination = ttk.Frame(root, padding=12)
             destination.pack(fill="x")
             ttk.Label(destination, text="出力先:").pack(side="left")
@@ -303,7 +339,7 @@ def main():
 
         def current_paths(self):
             if self.is_folder_mode():
-                return list_images(self.folder, self.sort.get()) if self.folder else []
+                return list(self.folder_listing)
             return self.model.paths
 
         def change_tab(self, _=None):
@@ -313,11 +349,7 @@ def main():
             self.refresh()
 
         def refresh(self, selected=()):
-            try:
-                paths = self.current_paths()
-            except OSError as error:
-                messagebox.showerror("フォルダ読込エラー", str(error))
-                paths = []
+            paths = self.current_paths()
             self.visible = [
                 path for path in paths if self.query.get().casefold() in path.name.casefold()
             ]
@@ -382,6 +414,20 @@ def main():
                 self.reload_folder()
 
         def reload_folder(self):
+            if self.folder:
+                try:
+                    self.folder_listing = list_images(self.folder, SORT_ORDERS[self.sort.get()])
+                    self.folder_listed_for = self.folder
+                except OSError as error:
+                    # Keep the previous listing, but never show one that was
+                    # scanned from a different folder.
+                    if self.folder_listed_for != self.folder:
+                        self.folder_listing = []
+                        self.folder_listed_for = self.folder
+                    messagebox.showerror("フォルダ読込エラー", str(error))
+            else:
+                self.folder_listing = []
+                self.folder_listed_for = None
             self.grid_page = 0
             self.grid_selection.clear()
             self.refresh()
@@ -424,35 +470,69 @@ def main():
 
         def drag_start(self, event):
             self.drag_origin = self.tree.identify_row(event.y)
+            # The Treeview class binding replaces a multi-selection with the
+            # clicked row on button press. Widget bindings run first, so the
+            # selection can still be saved here and restored on drop.
+            selected_iids = set(self.tree.selection())
+            self.drag_saved_selection = (
+                {Path(value) for value in selected_iids}
+                if self.drag_origin and self.drag_origin in selected_iids
+                else None
+            )
 
         def drag_end(self, event):
             target = self.tree.identify_row(event.y)
-            if (
-                not self.is_folder_mode()
-                and self.drag_origin
-                and target
-                and target != self.drag_origin
-            ):
-                selected = self.selected() or {Path(self.drag_origin)}
-                self.model.move_before(selected, Path(target))
-                self.refresh(selected)
+            origin = self.drag_origin
+            saved = self.drag_saved_selection
             self.drag_origin = None
+            self.drag_saved_selection = None
+            if (
+                self.is_folder_mode()
+                or not origin
+                or not target
+                or target == origin
+            ):
+                return
+            selected = saved or (self.selected() or {Path(origin)})
+            if saved:
+                self.tree.selection_set([str(path) for path in saved])
+            self.model.move_before(selected, Path(target))
+            self.refresh(selected)
 
         def tree_selected(self, _):
             selection = self.tree.selection()
             if selection:
                 self.show_preview(Path(selection[-1]))
 
+        def default_dpi_changed(self, *_):
+            if self.preview_path is not None and not self.closing:
+                self.show_preview(self.preview_path)
+
         def show_preview(self, path):
+            self.preview_path = Path(path)
             self.preview_generation += 1
             generation = self.preview_generation
+            try:
+                default_dpi = float(self.default_dpi.get())
+                if not 1 <= default_dpi <= 10000:
+                    raise ValueError
+                default_error = None
+            except ValueError:
+                default_dpi = DEFAULT_DPI
+                default_error = "DPI不明時の既定値は1〜10000で指定してください"
 
             def load():
+                image = None
+                info = None
+                error = None
                 try:
+                    info = inspect_image(path, default_dpi)
                     image = make_thumbnail(path, (215, 230))
-                    self.events.put(("preview", (generation, path, image, None)))
-                except Exception as error:
-                    self.events.put(("preview", (generation, path, None, str(error))))
+                except Exception as exception:
+                    error = str(exception)
+                self.events.put(
+                    ("preview", (generation, path, image, info, error, default_error))
+                )
 
             self.executor.submit(load)
 
@@ -488,6 +568,8 @@ def main():
                 for widget in (cell, label, caption):
                     widget.bind("<Button-1>", lambda event, item=path: self.grid_click(event, item))
                 if path in self.thumbnail_cache:
+                    # Most recently used thumbnails survive eviction (LRU).
+                    self.thumbnail_cache.move_to_end(path)
                     self.apply_thumbnail(path, self.thumbnail_cache[path])
                 elif path not in self.pending_thumbnails:
                     self.pending_thumbnails.add(path)
@@ -553,6 +635,7 @@ def main():
                     margin_mm=float(self.margin.get()),
                     bg_color=colors[self.background.get()],
                     auto_rotate=self.rotate.get(),
+                    default_dpi=float(self.default_dpi.get()),
                 )
                 options.validate()
                 if not paths:
@@ -601,12 +684,35 @@ def main():
                         self.progress["value"] = payload
                         self.status.config(text=f"変換中… {payload}%")
                     elif kind == "preview":
-                        generation, path, image, error = payload
+                        generation, path, image, info, error, default_error = payload
                         if generation == self.preview_generation and not self.closing:
                             photo = ImageTk.PhotoImage(image, master=root) if image else None
                             self.preview.config(image=photo or "")
                             self.preview.image = photo
-                            self.preview_text.config(text=f"{path.name}\n{error or ''}")
+                            details = [path.name]
+                            if info:
+                                dpi = info.dpi
+                                width_mm = info.width / dpi.horizontal * 25.4
+                                height_mm = info.height / dpi.vertical * 25.4
+                                frames = (
+                                    f" / {info.frame_count}フレーム"
+                                    if info.frame_count > 1
+                                    else ""
+                                )
+                                details.extend(
+                                    [
+                                        f"{info.width}×{info.height}px{frames}",
+                                        f"DPI: {dpi.horizontal:g} × {dpi.vertical:g} "
+                                        f"({dpi.source})",
+                                        f"元寸法: {width_mm:.1f} × {height_mm:.1f} mm",
+                                        f"ICC: {info.icc_profile}",
+                                    ]
+                                )
+                            if default_error:
+                                details.append(default_error)
+                            if error:
+                                details.append(f"プレビュー: {error}")
+                            self.preview_text.config(text="\n".join(details))
                         if image:
                             image.close()
                     elif kind == "thumbnail":
@@ -615,8 +721,9 @@ def main():
                         if not self.closing:
                             photo = ImageTk.PhotoImage(image, master=root) if image else None
                             self.thumbnail_cache[path] = photo
+                            # Evict the least recently used thumbnails.
                             while len(self.thumbnail_cache) > 100:
-                                self.thumbnail_cache.pop(next(iter(self.thumbnail_cache)))
+                                self.thumbnail_cache.popitem(last=False)
                             self.apply_thumbnail(path, photo)
                         if image:
                             image.close()
@@ -677,7 +784,8 @@ def main():
             self.executor.shutdown(wait=False, cancel_futures=True)
             self.status.config(text="終了処理中…")
 
-    Application()
+    global LAST_APPLICATION
+    LAST_APPLICATION = Application()
     root.mainloop()
     return 0
 
