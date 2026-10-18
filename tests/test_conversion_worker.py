@@ -69,6 +69,68 @@ def test_worker_generates_base64_preview_for_extended_formats(tmp_path):
         assert thumbnail.size == (32, 24)
 
 
+def test_worker_inspect_reports_size_dpi_and_icc(tmp_path):
+    source = tmp_path / "details.png"
+    with Image.new("RGB", (60, 90), "navy") as image:
+        image.save(source, dpi=(300, 300))
+
+    completed, events = invoke_worker(
+        tmp_path,
+        {"operation": "inspect", "imagePaths": [str(source)]},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = events[-1]
+    assert result["type"] == "inspect"
+    assert (result["width"], result["height"]) == (60, 90)
+    assert result["frameCount"] == 1
+    assert abs(result["dpiHorizontal"] - 300) < 0.5
+    assert abs(result["dpiVertical"] - 300) < 0.5
+    assert result["dpiUsedDefault"] is False
+    assert result["iccProfile"].startswith("なし")
+
+
+def test_worker_inspect_uses_the_requested_default_dpi(tmp_path):
+    source = tmp_path / "no-dpi.png"
+    with Image.new("RGB", (40, 20), "olive") as image:
+        image.save(source)
+
+    completed, events = invoke_worker(
+        tmp_path,
+        {
+            "operation": "inspect",
+            "imagePaths": [str(source)],
+            "options": {"defaultDpi": 200},
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = events[-1]
+    assert result["dpiHorizontal"] == 200
+    assert result["dpiVertical"] == 200
+    assert result["dpiUsedDefault"] is True
+    assert "既定値" in result["dpiSource"]
+
+
+def test_worker_inspect_rejects_an_out_of_range_default_dpi(tmp_path):
+    source = tmp_path / "sample.png"
+    with Image.new("RGB", (10, 10), "black") as image:
+        image.save(source)
+
+    completed, events = invoke_worker(
+        tmp_path,
+        {
+            "operation": "inspect",
+            "imagePaths": [str(source)],
+            "options": {"defaultDpi": 0},
+        },
+    )
+
+    assert completed.returncode == 1
+    assert events[-1]["type"] == "error"
+    assert events[-1]["message"] == "DPI不明時の既定値は1〜10000で指定してください"
+
+
 def test_worker_reports_skipped_inputs_as_partial_success(tmp_path):
     valid = tmp_path / "valid.png"
     broken = tmp_path / "broken.jpg"
@@ -233,6 +295,39 @@ def test_server_mode_reports_errors_per_request(tmp_path):
         process.stdin.flush()
         events = read_until(process, lambda event: event.get("id") is None and event["type"] == "error")
         assert "id" in events[-1]["message"]
+    finally:
+        process.stdin.close()
+        process.wait(timeout=30)
+    assert process.returncode == 0
+
+
+def test_server_mode_answers_inspect_with_a_terminal_event(tmp_path):
+    source = tmp_path / "sample.png"
+    with Image.new("RGB", (60, 90), "navy") as image:
+        image.save(source)
+
+    process = start_server()
+    try:
+        process.stdin.write(
+            json.dumps(
+                {
+                    "id": "info-1",
+                    "operation": "inspect",
+                    "imagePaths": [str(source)],
+                    "options": {"defaultDpi": 150},
+                }
+            )
+            + "\n"
+        )
+        process.stdin.flush()
+        events = read_until(
+            process,
+            lambda event: event.get("id") == "info-1"
+            and event["type"] in {"inspect", "error"},
+        )
+        result = events[-1]
+        assert result["type"] == "inspect", result
+        assert (result["width"], result["height"]) == (60, 90)
     finally:
         process.stdin.close()
         process.wait(timeout=30)

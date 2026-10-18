@@ -191,7 +191,8 @@ public sealed class ConversionWorkerService : IDisposable
                 }
 
                 PendingRequest? pending;
-                var terminal = message.Type is "completed" or "thumbnail" or "cancelled" or "error";
+                var terminal = message.Type
+                    is "completed" or "thumbnail" or "inspect" or "cancelled" or "error";
                 lock (_gate)
                 {
                     if (!_pending.TryGetValue(message.Id, out pending))
@@ -217,7 +218,7 @@ public sealed class ConversionWorkerService : IDisposable
                     case "progress":
                         pending.Progress?.Report(message);
                         break;
-                    case "completed" or "thumbnail":
+                    case "completed" or "thumbnail" or "inspect":
                         pending.Completion.TrySetResult(message);
                         break;
                     case "cancelled":

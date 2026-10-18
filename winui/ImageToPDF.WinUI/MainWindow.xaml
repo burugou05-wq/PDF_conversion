@@ -200,6 +200,14 @@
                                 IsHitTestVisible="False" />
                         </Grid>
 
+                        <TextBlock
+                            x:Name="PreviewDetails"
+                            FontSize="12"
+                            LineHeight="17"
+                            TextWrapping="Wrap"
+                            IsTextSelectionEnabled="True"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
                         <TextBlock Text="画質" FontWeight="SemiBold" />
                         <ComboBox x:Name="QualityBox" SelectedIndex="0" HorizontalAlignment="Stretch">
                             <ComboBoxItem Content="元画質優先" Tag="original" />
@@ -233,6 +241,33 @@
                                 SmallChange="1"
                                 LargeChange="5" />
                         </Grid>
+
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="DPI不明時の既定値" FontWeight="SemiBold" />
+                                <TextBlock
+                                    Text="1〜10000 dpi（取得元は画像情報に表示）"
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <NumberBox
+                                x:Name="DpiBox"
+                                Grid.Column="1"
+                                Width="120"
+                                Minimum="1"
+                                Maximum="10000"
+                                SpinButtonPlacementMode="Compact"
+                                Value="96"
+                                SmallChange="1"
+                                LargeChange="24"
+                                ValueChanged="DpiBox_ValueChanged" />
+                        </Grid>
+                        <TextBlock
+                            x:Name="DpiErrorText"
+                            FontSize="12"
+                            TextWrapping="Wrap"
+                            Visibility="Collapsed"
+                            Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
 
                         <TextBlock Text="透過部分の背景" FontWeight="SemiBold" />
                         <ComboBox x:Name="BackgroundBox" SelectedIndex="0" HorizontalAlignment="Stretch">

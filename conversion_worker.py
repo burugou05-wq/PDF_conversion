@@ -1,5 +1,12 @@
 """JSONL worker entry point used by the WinUI frontend.
 
+Requests carry an ``operation``: ``convert`` (default) writes a PDF and emits
+``progress`` events plus a terminal ``completed`` event, ``thumbnail`` answers
+with base64 PNG data, and ``inspect`` answers with the first frame's size, DPI
+provenance, frame count and ICC description. Every request is answered by
+exactly one terminal event (``completed`` / ``thumbnail`` / ``inspect`` /
+``cancelled`` / ``error``).
+
 One-shot mode (compatibility and debugging)::
 
     conversion_worker.py --request request.json
@@ -34,6 +41,7 @@ from image_processor import (
     ConversionCancelled,
     ConversionOptions,
     convert_to_pdf,
+    inspect_image,
     make_thumbnail,
 )
 
@@ -97,6 +105,23 @@ def execute_request(request, cancel_event, emit):
                 emit("thumbnail", data=base64.b64encode(buffer.getvalue()).decode("ascii"))
         finally:
             thumbnail.close()
+        return 0
+    if operation == "inspect":
+        options = options_from_request(request)
+        # 範囲外の既定DPIはエンジンと同じ文言で弾きます（Tkinter版と同じ規則）。
+        options.validate()
+        info = inspect_image(image_paths[0], options.default_dpi)
+        emit(
+            "inspect",
+            width=info.width,
+            height=info.height,
+            frameCount=info.frame_count,
+            dpiHorizontal=info.dpi.horizontal,
+            dpiVertical=info.dpi.vertical,
+            dpiSource=info.dpi.source,
+            dpiUsedDefault=info.dpi.used_default,
+            iccProfile=info.icc_profile,
+        )
         return 0
     if operation != "convert":
         raise ValueError("ワーカー操作が不正です")

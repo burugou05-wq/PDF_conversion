@@ -23,9 +23,13 @@ public sealed partial class MainWindow : Window
         ".jpg", ".jpeg", ".png", ".avif", ".heic", ".heif", ".webp", ".bmp", ".gif", ".tif", ".tiff",
     };
 
+    /// <summary>DPI欄が範囲外のときに使う値（image_processor.DEFAULT_DPI と同じ 96）。</summary>
+    private const double DefaultDpiFallback = 96.0;
+
     private readonly ConversionWorkerService _worker = new();
     private CancellationTokenSource? _conversionCancellation;
     private int _previewGeneration;
+    private bool _settingsReady;
 
     public MainViewModel ViewModel { get; } = new();
 
@@ -41,6 +45,7 @@ public sealed partial class MainWindow : Window
             _worker.Dispose();
             AppLog.Info("アプリを終了しました");
         };
+        _settingsReady = true;
     }
 
     private async void AddFilesButton_Click(object sender, RoutedEventArgs e)
@@ -156,7 +161,11 @@ public sealed partial class MainWindow : Window
     private void RemoveButton_Click(object sender, RoutedEventArgs e)
     {
         ViewModel.Remove(FilesList.SelectedItems.OfType<ImageEntry>().ToArray());
+        // 読み込み中のプレビュー・画像情報が削除後の一覧に混ざらないよう世代を進めます。
+        _previewGeneration++;
         PreviewImage.Source = null;
+        PreviewDetails.Text = string.Empty;
+        PreviewHint.Text = "画像を選択するとプレビューを表示します";
         PreviewHint.Visibility = Visibility.Visible;
         UpdateListState();
     }
@@ -195,6 +204,7 @@ public sealed partial class MainWindow : Window
         if (selection.Length != 1)
         {
             PreviewImage.Source = null;
+            PreviewDetails.Text = string.Empty;
             PreviewHint.Text = selection.Length == 0
                 ? "画像を選択するとプレビューを表示します"
                 : "1枚選択するとプレビューを表示します";
@@ -206,6 +216,8 @@ public sealed partial class MainWindow : Window
         PreviewImage.Source = null;
         PreviewHint.Text = "プレビューを読み込み中…";
         PreviewHint.Visibility = Visibility.Visible;
+        // 寸法・DPI・ICCはワーカーの inspect で取得します（プレビュー画像とは別リクエスト）。
+        _ = LoadPreviewDetailsAsync(selected, generation);
         try
         {
             var file = await StorageFile.GetFileFromPathAsync(selected.FullPath);
@@ -270,6 +282,113 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 選択した画像の寸法・DPI（取得元）・元寸法・ICCをワーカーの inspect で取得して表示します。
+    /// Tkinter版のプレビュー下と同じ項目です。
+    /// </summary>
+    private async Task LoadPreviewDetailsAsync(ImageEntry selected, int generation)
+    {
+        var (defaultDpi, dpiError) = ReadDefaultDpi();
+        PreviewDetails.Text = dpiError ?? "画像情報を読み込み中…";
+        try
+        {
+            var info = await _worker.RunAsync(
+                new WorkerRequest
+                {
+                    Operation = "inspect",
+                    ImagePaths = new[] { selected.FullPath },
+                    Options = new WorkerOptions { DefaultDpi = defaultDpi },
+                },
+                progress: null,
+                CancellationToken.None);
+            if (generation != _previewGeneration)
+            {
+                return;
+            }
+
+            PreviewDetails.Text = FormatDetails(selected, info, dpiError);
+        }
+        catch (Exception error)
+        {
+            if (generation != _previewGeneration)
+            {
+                return;
+            }
+
+            PreviewDetails.Text = dpiError ?? $"画像情報を取得できません: {error.Message}";
+            AppLog.Warning(
+                $"画像情報を取得できませんでした: {selected.FullPath}"
+                + $": {error.GetType().Name}: {error.Message}");
+        }
+    }
+
+    /// <summary>DPI欄の値を読みます。範囲外のときは既定値とTkinter版と同じエラー文言を返します。</summary>
+    private (double Dpi, string? Error) ReadDefaultDpi()
+    {
+        var value = DpiBox.Value;
+        if (!double.IsFinite(value) || value < 1 || value > 10000)
+        {
+            return (DefaultDpiFallback, "DPI不明時の既定値は1〜10000で指定してください");
+        }
+
+        return (value, null);
+    }
+
+    private void UpdateDpiError()
+    {
+        var (_, error) = ReadDefaultDpi();
+        DpiErrorText.Text = error ?? string.Empty;
+        DpiErrorText.Visibility = error is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void DpiBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (!_settingsReady)
+        {
+            // InitializeComponent の途中でXAMLが初期値をセットしたときの通知です。
+            return;
+        }
+
+        UpdateDpiError();
+        // 元寸法(mm)は既定DPIに依存するため、Tkinter版と同じく表示を引き直します。
+        var selection = FilesList.SelectedItems.OfType<ImageEntry>().ToArray();
+        if (selection.Length == 1)
+        {
+            _ = LoadPreviewDetailsAsync(selection[0], _previewGeneration);
+        }
+    }
+
+    private static string FormatDetails(ImageEntry selected, WorkerMessage info, string? dpiError)
+    {
+        var lines = new List<string>
+        {
+            selected.Name,
+            $"{info.Width}×{info.Height}px"
+                + (info.FrameCount > 1 ? $" / {info.FrameCount}フレーム" : string.Empty),
+            $"DPI: {FormatDpi(info.DpiHorizontal)} × {FormatDpi(info.DpiVertical)}"
+                + $"（{info.DpiSource}）",
+            $"元寸法: {FormatMillimetres(info.Width, info.DpiHorizontal)}"
+                + $" × {FormatMillimetres(info.Height, info.DpiVertical)} mm",
+            $"ICC: {info.IccProfile}",
+        };
+        if (dpiError is not null)
+        {
+            lines.Add(dpiError);
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string FormatDpi(double value) =>
+        double.IsFinite(value) && value > 0
+            ? value.ToString("0.###", CultureInfo.InvariantCulture)
+            : "-";
+
+    private static string FormatMillimetres(int pixels, double dpi) =>
+        double.IsFinite(dpi) && dpi > 0
+            ? (pixels / dpi * 25.4).ToString("0.0", CultureInfo.InvariantCulture)
+            : "-";
+
     private async void ConvertButton_Click(object sender, RoutedEventArgs e)
     {
         if (ViewModel.Items.Count == 0)
@@ -331,6 +450,14 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var (defaultDpi, dpiError) = ReadDefaultDpi();
+        if (dpiError is not null)
+        {
+            AppLog.Warning($"既定DPIが範囲外です: {DpiBox.Value.ToString(CultureInfo.InvariantCulture)}");
+            await ShowMessageAsync("DPIを確認してください", dpiError);
+            return;
+        }
+
         var pageSize = SelectedTag(PaperBox);
         var quality = SelectedTag(QualityBox) ?? "original";
         var backgroundTag = SelectedTag(BackgroundBox) ?? "white";
@@ -358,6 +485,7 @@ public sealed partial class MainWindow : Window
                 MarginMm = MarginBox.Value,
                 Background = background,
                 AutoRotate = AutoRotateBox.IsChecked ?? false,
+                DefaultDpi = defaultDpi,
             },
         };
 
@@ -365,7 +493,8 @@ public sealed partial class MainWindow : Window
         AppLog.Info(
             $"変換を開始します: {request.ImagePaths.Count} 枚 → {outputPath}"
             + $" (画質={quality}, 用紙={(string.IsNullOrWhiteSpace(pageSize) ? "元のサイズ" : pageSize)},"
-            + $" 余白={MarginBox.Value.ToString("0.##", CultureInfo.InvariantCulture)} mm, 背景={backgroundName},"
+            + $" 余白={MarginBox.Value.ToString("0.##", CultureInfo.InvariantCulture)} mm,"
+            + $" 既定DPI={FormatDpi(defaultDpi)}, 背景={backgroundName},"
             + $" 自動回転={(AutoRotateBox.IsChecked == true ? "あり" : "なし")}, 上書き={(overwrite ? "あり" : "なし")})");
 
         _conversionCancellation = new CancellationTokenSource();
@@ -454,6 +583,7 @@ public sealed partial class MainWindow : Window
         QualityBox.IsEnabled = !isBusy;
         PaperBox.IsEnabled = !isBusy;
         MarginBox.IsEnabled = !isBusy;
+        DpiBox.IsEnabled = !isBusy;
         BackgroundBox.IsEnabled = !isBusy;
         AutoRotateBox.IsEnabled = !isBusy;
         OpenAfterBox.IsEnabled = !isBusy;

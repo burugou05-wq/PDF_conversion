@@ -36,7 +36,8 @@ public partial class App : Application
         _window.Activate();
     }
 
-    private static void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    // Microsoft.UI.Xaml にも UnhandledExceptionEventArgs があるため完全修飾します。
+    private static void OnUnhandledException(object sender, System.UnhandledExceptionEventArgs e)
     {
         AppLog.Error(
             $"未処理の例外が発生しました (IsTerminating={e.IsTerminating})",
