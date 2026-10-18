@@ -14,7 +14,8 @@ v2.1.0 から、このWinUI 3版が正式な画面です。Windows 11 の標準�
 - `ViewModels/MainViewModel.cs`: 画像一覧、検索による表示絞り込み、フォルダーの並び順、順番変更。
 - `Services/ConversionWorkerService.cs`: 変換ワーカーを1つだけ起動して使い回します（stdinにJSON Linesリクエスト、stdoutからリクエストID付きの応答を受信）。進捗を画面へ流し、リクエスト単位で協調キャンセルを送ります。ワーカーは `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` のJob Objectに割り当てるためアプリが異常終了しても残らず、予期せず終了した場合は自動で再起動します。
 - `Services/EmbeddedWorker.cs`: 単一EXEに埋め込んだ `ImageToPDFWorker.exe` を `%LOCALAPPDATA%\ImageToPDF\worker\<ビルドID>\` に展開します。
-- `Services/SelfTest.cs`: ビルド検証用の `--selftest-convert <入力画像> <出力PDF>` の処理です。通常の利用では使いません。
+- `Services/AppLog.cs`: 起動、変換の開始・完了・キャンセル・失敗理由、スキップした画像、ワーカーの起動と終了を `%LOCALAPPDATA%\ImageToPDF\app.log` に記録します。Tkinter版と同じ 1MB×3世代のローテーションで、Python側に依存せずC#だけで完結します。書き込みはベストエフォートで、失敗しても変換は止まりません。環境変数 `IMAGETOPDF_APP_LOG` で保存先を上書きできます（ビルド検証とデバッグ用）。
+- `Services/SelfTest.cs`: ビルド検証用の `--selftest-convert <入力画像> <出力PDF>` の処理です。変換に加えて、app.log に記録が残り1MBで繰り下げられることも確認します。通常の利用では使いません。
 - `../../conversion_worker.py`: JSONリクエストを受け取り、JSON Linesで結果を返す変換ワーカーです。既存の `image_processor.py` を使います。引数なしで起動するとstdinが閉じるまでリクエストを処理し続け、`--request <ファイル>` は1リクエストだけ処理して終了します（テスト・デバッグ用）。サムネイルもPillowで生成するため、Windowsがネイティブ表示できない形式にも対応します。
 
 ## 開発
@@ -43,7 +44,7 @@ PowerShellで次を実行します。
 3. MSBuildでWinUI版を `PublishSingleFile` の self-contained として発行します。ワーカーはEXE内に埋め込まれます。
 4. 発行されたファイルがEXE1つだけであることを確認します。
 5. `dist\ImageToPDF-v<version>-Windows-x64.exe` と `dist\SHA256SUMS.txt` を作成します。
-6. そのEXEを単独で一時フォルダーにコピーし、埋め込みワーカーによる日本語パスのPDF変換と、ウィンドウの起動を確認します。
+6. そのEXEを単独で一時フォルダーにコピーし、埋め込みワーカーによる日本語パスのPDF変換、`app.log` への記録と1MBローテーション、ウィンドウの起動と起動ログの記録を確認します（ログは `IMAGETOPDF_APP_LOG` で一時ファイルへ向けるため、実行機のログは汚しません）。
 
 ビルドにはWindowsと Windows App SDK の復元が必要です。CIは `windows-latest` で同じスクリプトを実行します。
 

@@ -134,8 +134,15 @@ function Test-SingleExeConversion {
     # The resident worker logs its startup/protocol steps when this variable
     # is set; the log localizes EXE-only hangs that stderr cannot show.
     $WorkerLog = "$OutputPdf.worker-log.txt"
+    # The application log is redirected the same way: the packaged EXE then
+    # writes its records to a temp file, so the runner's own %LOCALAPPDATA%
+    # stays clean and the self-test can assert that logging and its 1MB
+    # rotation work outside the development tree.
+    $AppLog = "$OutputPdf.app-log.txt"
     if (Test-Path -LiteralPath $WorkerLog) { Remove-Item -LiteralPath $WorkerLog -Force }
+    if (Test-Path -LiteralPath $AppLog) { Remove-Item -LiteralPath $AppLog -Force }
     $env:IMAGETOPDF_WORKER_LOG = $WorkerLog
+    $env:IMAGETOPDF_APP_LOG = $AppLog
     try {
         $Process = Start-Process -FilePath $ExecutablePath `
             -ArgumentList @("--selftest-convert", "`"$ImagePath`"", "`"$OutputPdf`"") `
@@ -143,6 +150,7 @@ function Test-SingleExeConversion {
     }
     finally {
         Remove-Item Env:\IMAGETOPDF_WORKER_LOG -ErrorAction SilentlyContinue
+        Remove-Item Env:\IMAGETOPDF_APP_LOG -ErrorAction SilentlyContinue
     }
 
     function Get-SelftestDiagnostics {
@@ -151,6 +159,14 @@ function Test-SingleExeConversion {
             if (Test-Path -LiteralPath $Log) {
                 $Parts += "[$([System.IO.Path]::GetFileName($Log))]`n$([System.IO.File]::ReadAllText($Log))"
             }
+        }
+        if (Test-Path -LiteralPath $AppLog) {
+            # The rotation check pads the log with 400KB lines; keep only the
+            # human-readable records in the failure message.
+            $AppLogRecords = @(Get-Content -LiteralPath $AppLog -Encoding utf8 |
+                Where-Object { $_.Length -lt 400 } |
+                Select-Object -Last 30)
+            $Parts += "[app-log.txt]`n$($AppLogRecords -join "`n")"
         }
         if ($Parts.Count -eq 0) { return "no diagnostics were written" }
         return $Parts -join "`n"
@@ -174,7 +190,19 @@ function Test-SingleExeConversion {
         throw "Single-file conversion did not write a PDF header."
     }
 
+    if (-not (Test-Path -LiteralPath $AppLog)) {
+        throw "Single-file conversion did not write the application log: $AppLog"
+    }
+    $AppLogLength = (Get-Item -LiteralPath $AppLog).Length
+    if ($AppLogLength -lt 1) {
+        throw "Application log is empty after the single-file conversion: $AppLog"
+    }
+    if (-not (Test-Path -LiteralPath "$AppLog.1")) {
+        throw "Application log did not rotate past 1MB: $AppLog.1"
+    }
+
     Write-Host "Single-file embedded-worker conversion passed: $ExecutablePath"
+    Write-Host "Application log verified: $AppLog ($AppLogLength bytes, rotated to $AppLog.1)"
 }
 
 function Get-WinUiCrashContext {
@@ -215,6 +243,11 @@ function Test-WinUiStartup {
         [Parameter(Mandatory)][string]$WorkingDirectory
     )
 
+    # The GUI writes its startup record to app.log; redirect it into the temp
+    # verification folder so the check below can read what the window logged.
+    $AppLog = Join-Path $WorkingDirectory "起動ログ.txt"
+    if (Test-Path -LiteralPath $AppLog) { Remove-Item -LiteralPath $AppLog -Force }
+    $env:IMAGETOPDF_APP_LOG = $AppLog
     $Process = $null
     $StartupStartedAt = Get-Date
     try {
@@ -246,9 +279,19 @@ function Test-WinUiStartup {
             throw "WinUI main window was not found. Actual title: '$($Process.MainWindowTitle)'"
         }
 
+        if (-not (Test-Path -LiteralPath $AppLog)) {
+            throw "WinUI startup did not create the application log: $AppLog"
+        }
+        $StartupLog = [System.IO.File]::ReadAllText($AppLog, [System.Text.Encoding]::UTF8)
+        if ($StartupLog -notlike "*アプリを開始しました*") {
+            throw "WinUI startup log has no startup record: $StartupLog"
+        }
+
         Write-Host "WinUI executable startup smoke test passed: $ExecutablePath"
+        Write-Host "WinUI startup log verified: $AppLog"
     }
     finally {
+        Remove-Item Env:\IMAGETOPDF_APP_LOG -ErrorAction SilentlyContinue
         if ($null -ne $Process) {
             try {
                 $Process.Refresh()

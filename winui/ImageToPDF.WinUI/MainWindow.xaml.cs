@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using ImageToPDF.WinUI.Models;
 using ImageToPDF.WinUI.Services;
@@ -38,6 +39,7 @@ public sealed partial class MainWindow : Window
         {
             _conversionCancellation?.Cancel();
             _worker.Dispose();
+            AppLog.Info("アプリを終了しました");
         };
     }
 
@@ -98,10 +100,12 @@ public sealed partial class MainWindow : Window
             }
 
             StatusText.Text = added == 0 ? "追加できる画像がありません" : $"{added} 枚追加しました";
+            AppLog.Info($"画像を追加しました: {added} 枚（一覧 {ViewModel.Items.Count} 枚）");
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
         {
             StatusText.Text = $"画像の追加に失敗しました: {error.Message}";
+            AppLog.Warning($"画像の追加に失敗しました: {error.GetType().Name}: {error.Message}");
         }
 
         UpdateListState();
@@ -252,8 +256,10 @@ public sealed partial class MainWindow : Window
                     PreviewHint.Visibility = Visibility.Collapsed;
                 }
             }
-            catch (Exception)
+            catch (Exception error)
             {
+                AppLog.Warning(
+                    $"プレビューを表示できませんでした: {selected.FullPath}: {error.GetType().Name}: {error.Message}");
                 if (generation == _previewGeneration)
                 {
                     PreviewImage.Source = null;
@@ -285,12 +291,14 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException)
         {
+            AppLog.Warning($"保存先を解決できませんでした: {OutputPathBox.Text}: {error.Message}");
             await ShowMessageAsync("保存先を確認してください", error.Message);
             return;
         }
 
         if (!string.Equals(Path.GetExtension(outputPath), ".pdf", StringComparison.OrdinalIgnoreCase))
         {
+            AppLog.Warning($"保存先の拡張子が .pdf ではありません: {outputPath}");
             await ShowMessageAsync("保存先を確認してください", "保存先の拡張子は .pdf にしてください。");
             return;
         }
@@ -317,17 +325,26 @@ public sealed partial class MainWindow : Window
 
         if (!double.IsFinite(MarginBox.Value) || MarginBox.Value < 0 || MarginBox.Value > 100)
         {
+            AppLog.Warning(
+                $"余白が範囲外です: {MarginBox.Value.ToString(CultureInfo.InvariantCulture)}（0〜100 mm が必要）");
             await ShowMessageAsync("余白を確認してください", "余白は0〜100 mmの範囲で指定してください。");
             return;
         }
 
         var pageSize = SelectedTag(PaperBox);
         var quality = SelectedTag(QualityBox) ?? "original";
-        var background = SelectedTag(BackgroundBox) switch
+        var backgroundTag = SelectedTag(BackgroundBox) ?? "white";
+        var background = backgroundTag switch
         {
             "black" => new[] { 0, 0, 0 },
             "gray" => new[] { 180, 180, 180 },
             _ => new[] { 255, 255, 255 },
+        };
+        var backgroundName = backgroundTag switch
+        {
+            "black" => "黒",
+            "gray" => "グレー",
+            _ => "白",
         };
         var request = new WorkerRequest
         {
@@ -343,6 +360,13 @@ public sealed partial class MainWindow : Window
                 AutoRotate = AutoRotateBox.IsChecked ?? false,
             },
         };
+
+        var stopwatch = Stopwatch.StartNew();
+        AppLog.Info(
+            $"変換を開始します: {request.ImagePaths.Count} 枚 → {outputPath}"
+            + $" (画質={quality}, 用紙={(string.IsNullOrWhiteSpace(pageSize) ? "元のサイズ" : pageSize)},"
+            + $" 余白={MarginBox.Value.ToString("0.##", CultureInfo.InvariantCulture)} mm, 背景={backgroundName},"
+            + $" 自動回転={(AutoRotateBox.IsChecked == true ? "あり" : "なし")}, 上書き={(overwrite ? "あり" : "なし")})");
 
         _conversionCancellation = new CancellationTokenSource();
         SetBusy(true);
@@ -361,8 +385,17 @@ public sealed partial class MainWindow : Window
         {
             var result = await _worker.RunAsync(
                 request, progress, _conversionCancellation.Token);
+            stopwatch.Stop();
             ConversionProgress.Value = 100;
             StatusText.Text = $"完了: {result.PageCount} ページを保存しました";
+            AppLog.Info(
+                $"変換が完了しました: {result.PageCount} ページ → {result.OutputPath}"
+                + $" ({ElapsedText(stopwatch)}, スキップ {result.Skipped.Count} 件)");
+            foreach (var skipped in result.Skipped)
+            {
+                AppLog.Warning($"変換をスキップしました: {skipped.Path} — {skipped.Reason}");
+            }
+
             if (result.Skipped.Count > 0)
             {
                 var skippedSummary = string.Join(
@@ -385,11 +418,15 @@ public sealed partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
+            stopwatch.Stop();
             StatusText.Text = "変換をキャンセルしました";
+            AppLog.Info($"変換をキャンセルしました: {outputPath} ({ElapsedText(stopwatch)})");
         }
         catch (Exception error)
         {
+            stopwatch.Stop();
             StatusText.Text = "変換に失敗しました";
+            AppLog.Error($"変換に失敗しました: {outputPath} ({ElapsedText(stopwatch)})", error);
             await ShowMessageAsync("変換に失敗しました", error.Message);
         }
         finally
@@ -440,6 +477,9 @@ public sealed partial class MainWindow : Window
     private static string? SelectedTag(ComboBox comboBox) =>
         (comboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString();
 
+    private static string ElapsedText(Stopwatch stopwatch) =>
+        stopwatch.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + " 秒";
+
     private void Root_DragOver(object sender, DragEventArgs e)
     {
         e.AcceptedOperation = e.DataView.Contains(StandardDataFormats.StorageItems)
@@ -461,6 +501,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
+            AppLog.Warning($"ドロップした項目を読み込めません: {error.GetType().Name}: {error.Message}");
             await ShowMessageAsync("ドロップした項目を読み込めません", error.Message);
         }
     }

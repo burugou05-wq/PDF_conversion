@@ -145,7 +145,7 @@ CIはWindows/LinuxのPython 3.10〜3.12でテストし、Windows上でWinUI版�
 - `cli.py`: CLI（Pythonソースから実行）
 - `img2pdf_app.py`, `file_model.py`, `ui_theme.py`: 従来のTkinter版（互換用）
 - `app_config.py`: 名前・バージョン・配布設定
-- `app_paths.py`: Tk版のログ保存先（ポータブル版はアプリフォルダー内）
+- `app_paths.py`: Tkinter版のログ保存先（ポータブル版はアプリフォルダー内）。WinUI版のログ保存先はC#側（`Services/AppLog.cs`）で解決します
 - `tests/`: 選択操作、用紙寸法、画像処理、キャンセル、配布パス、ワーカープロトコルの回帰テスト
 - `build_winui.ps1`: 正式版のWinUI単一EXEのビルドと検証
 
@@ -155,6 +155,6 @@ CIはWindows/LinuxのPython 3.10〜3.12でテストし、Windows上でWinUI版�
 - WinUI版にはTkinter版のグリッド表示、既定DPIの変更、ICC・DPI情報の詳細表示はまだありません。
 - 画像前処理は逐次実行し、巨大画像の同時展開を避けます。ただしPDF結合のオブジェクトはメモリに保持されるため、無制限の大量画像処理を保証しません。
 - 画像パーサーの安全性のため、Pillowの巨大画像保護を無効にしていません。
-- ログ（Tkinter版のみ）: 通常版は `%LOCALAPPDATA%\ImageToPDF\app.log`、ポータブル版は実行ファイルの隣の `PortableData\app.log` に保存されます。画像パスや失敗理由を含むため、共有前に内容を確認してください。WinUI版は現時点でログファイルを作成しません。
+- ログ: 起動、変換の開始・完了・キャンセル・失敗理由、スキップした画像、ワーカーの起動と終了を `%LOCALAPPDATA%\ImageToPDF\app.log` に記録します（WinUI版・Tkinter版とも）。1MBを超えると `app.log.1`〜`app.log.3` へ繰り下げ、最大4ファイル（約4MB）まで保持します。Tkinter版のポータブル版は実行ファイルの隣の `PortableData\app.log` です。画像パスや失敗理由を含むため、共有前に内容を確認してください。
 - WinUI版が展開する変換エンジンは `%LOCALAPPDATA%\ImageToPDF\worker` にあります。古いバージョンのフォルダーは自動では削除しません。不要になったら手動で削除できます。
 - 配布ライセンスはMIT Licenseです。依存ライブラリの条件（img2pdfのLGPL、pillow-heifバイナリwheelのGPLv2など）は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。

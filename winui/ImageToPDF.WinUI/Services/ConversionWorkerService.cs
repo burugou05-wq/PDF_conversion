@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -19,6 +20,9 @@ namespace ImageToPDF.WinUI.Services;
 /// </summary>
 public sealed class ConversionWorkerService : IDisposable
 {
+    /// <summary>ワーカー1回の起動あたり app.log に残すstderrの行数の上限。</summary>
+    private const int MaxWorkerErrorLines = 500;
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true,
@@ -126,14 +130,35 @@ public sealed class ConversionWorkerService : IDisposable
 
             AssignToKillOnCloseJob(process);
             _process = process;
+            AppLog.Info($"変換ワーカーを起動しました: {process.StartInfo.FileName}");
             _ = Task.Run(() => ReadStandardOutputLoop(process));
             _ = Task.Run(async () =>
             {
                 try
                 {
                     // Drain stderr continuously so the pipe can never fill up
-                    // and block the worker.
-                    await process.StandardError.ReadToEndAsync();
+                    // and block the worker. Its lines are the Python side's
+                    // warnings and tracebacks, which otherwise disappear.
+                    var logged = 0;
+                    while (await process.StandardError.ReadLineAsync() is { } line)
+                    {
+                        if (line.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        if (logged < MaxWorkerErrorLines)
+                        {
+                            logged++;
+                            AppLog.Warning($"変換ワーカー: {line}");
+                        }
+                        else if (logged == MaxWorkerErrorLines)
+                        {
+                            // 止まらない出力でログが埋まらないよう、記録だけ打ち切ります。
+                            logged++;
+                            AppLog.Warning("変換ワーカーの出力が多いため、以降のstderrは記録しません");
+                        }
+                    }
                 }
                 catch (Exception)
                 {
@@ -211,7 +236,23 @@ public sealed class ConversionWorkerService : IDisposable
             // The loop ends when the worker exits; fail anything still pending.
         }
 
+        AppLog.Info($"変換ワーカーが終了しました: exit={DescribeExitCode(process)}");
         FailPendingRequests("変換ワーカーが終了しました。", process);
+    }
+
+    private static string DescribeExitCode(Process process)
+    {
+        try
+        {
+            return process.HasExited
+                ? process.ExitCode.ToString(CultureInfo.InvariantCulture)
+                : "running";
+        }
+        catch (Exception error) when (error is InvalidOperationException or NotSupportedException)
+        {
+            // The process object lost its handle before the exit code was read.
+            return "unknown";
+        }
     }
 
     private void TryWriteLine(string line)
@@ -240,17 +281,11 @@ public sealed class ConversionWorkerService : IDisposable
                 process.StandardInput.BaseStream.Flush();
             }
         }
-        catch (IOException)
+        catch (Exception error) when (error is IOException or ObjectDisposedException or InvalidOperationException)
         {
-            // The worker may have already exited.
-        }
-        catch (ObjectDisposedException)
-        {
-            // The worker may have already exited.
-        }
-        catch (InvalidOperationException)
-        {
-            // The redirected input stream may be closing during process exit.
+            // The worker may have already exited, or the redirected input stream
+            // may be closing during process exit. Pending callers are failed below.
+            AppLog.Warning($"変換ワーカーへの書き込みに失敗しました: {error.GetType().Name}: {error.Message}");
         }
         finally
         {
@@ -276,6 +311,7 @@ public sealed class ConversionWorkerService : IDisposable
 
     private void FailPendingRequests(string reason, Process? owner = null)
     {
+        int failed;
         lock (_gate)
         {
             // When a worker process dies, only the requests it owns are
@@ -288,6 +324,14 @@ public sealed class ConversionWorkerService : IDisposable
                 entry.Value.Completion.TrySetException(new InvalidOperationException(reason));
                 _pending.Remove(entry.Key);
             }
+
+            failed = doomed.Count;
+        }
+
+        if (failed > 0)
+        {
+            // 正常な終了では未完了のリクエストは残らないため、これは異常の記録です。
+            AppLog.Warning($"未完了のリクエスト {failed} 件を失敗にしました: {reason}");
         }
     }
 
