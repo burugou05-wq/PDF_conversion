@@ -136,7 +136,7 @@ public sealed class ConversionWorkerService : IDisposable
         }
     }
 
-    private void ReadStandardOutputLoop(Process process)
+    private async Task ReadStandardOutputLoop(Process process)
     {
         try
         {
@@ -180,7 +180,7 @@ public sealed class ConversionWorkerService : IDisposable
                         pending.Completion.TrySetResult(message);
                         break;
                     case "cancelled":
-                        pending.Completion.TrySetCanceled(
+                        pending.Completion.TrySetException(
                             new OperationCanceledException(message.Message));
                         break;
                     case "error":
