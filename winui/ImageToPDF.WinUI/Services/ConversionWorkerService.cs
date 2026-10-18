@@ -53,6 +53,14 @@ public sealed class ConversionWorkerService : IDisposable
             using var cancellationRegistration = cancellationToken.Register(() =>
                 TryWriteLine("{\"type\":\"cancel\",\"id\":\"" + requestId + "\"}"));
             TryWriteLine(SerializeRequest(request, requestId));
+            // If the worker died between its startup and this write (for
+            // example during self-extraction), the pipe write can silently
+            // buffer; fail fast instead of waiting for a response forever.
+            if (worker.HasExited)
+            {
+                throw new InvalidOperationException("変換ワーカーが起動直後に終了しました。");
+            }
+
             return await completion.Task.WaitAsync(cancellationToken);
         }
         finally
@@ -200,9 +208,9 @@ public sealed class ConversionWorkerService : IDisposable
 
     private void TryWriteLine(string line)
     {
+        Process? process = null;
         try
         {
-            Process? process;
             lock (_gate)
             {
                 process = _process;
@@ -215,8 +223,13 @@ public sealed class ConversionWorkerService : IDisposable
 
             lock (_stdinGate)
             {
-                process.StandardInput.WriteLine(line);
-                process.StandardInput.Flush();
+                // StandardInput's StreamWriter encodes with the console code
+                // page, which mangles non-ASCII paths and is undefined for a
+                // GUI app. Write UTF-8 bytes to the raw pipe instead; the
+                // worker reads stdin as UTF-8.
+                var bytes = Encoding.UTF8.GetBytes(line + "\n");
+                process.StandardInput.BaseStream.Write(bytes, 0, bytes.Length);
+                process.StandardInput.BaseStream.Flush();
             }
         }
         catch (IOException)
@@ -230,6 +243,26 @@ public sealed class ConversionWorkerService : IDisposable
         catch (InvalidOperationException)
         {
             // The redirected input stream may be closing during process exit.
+        }
+        finally
+        {
+            if (process is not null)
+            {
+                try
+                {
+                    // A failed write means this worker is gone; fail anything
+                    // still waiting on it instead of leaving callers hanging.
+                    if (process.HasExited)
+                    {
+                        FailPendingRequests("変換ワーカーとの通信が切断されました。", process);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // The process object lost its handle; the reader loop will
+                    // fail any remaining requests.
+                }
+            }
         }
     }
 

@@ -137,11 +137,17 @@ function Test-SingleExeConversion {
     try {
         if (-not $Process.WaitForExit(120000)) {
             $Process.Kill($true)
-            throw "Single-file conversion self-test timed out."
+            $SelftestLog = "$OutputPdf.selftest-log.txt"
+            $LogDetails = if (Test-Path -LiteralPath $SelftestLog) { [System.IO.File]::ReadAllText($SelftestLog) } else { "no selftest log was written" }
+            throw "Single-file conversion self-test timed out. Selftest log: $LogDetails"
         }
         if ($Process.ExitCode -ne 0) {
             $ErrorFile = "$OutputPdf.selftest-error.txt"
+            $SelftestLog = "$OutputPdf.selftest-log.txt"
             $Details = if (Test-Path -LiteralPath $ErrorFile) { [System.IO.File]::ReadAllText($ErrorFile) } else { "no details" }
+            if (Test-Path -LiteralPath $SelftestLog) {
+                $Details = "$Details`nSelftest log:`n$([System.IO.File]::ReadAllText($SelftestLog))"
+            }
             throw "Single-file conversion self-test failed (exit code $($Process.ExitCode)): $Details"
         }
     }

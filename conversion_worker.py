@@ -43,6 +43,10 @@ def configure_streams():
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stdin, "reconfigure"):
+        # The WinUI host writes UTF-8 bytes to the pipe; the platform default
+        # for a piped stdin is the ANSI/OEM code page, which mangles paths.
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 
 def options_from_request(request):
