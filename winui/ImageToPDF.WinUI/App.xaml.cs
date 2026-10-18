@@ -31,7 +31,8 @@ public partial class App : Application
 
         AppLog.Info(
             "アプリを開始しました"
-            + $" (v{AppLog.ApplicationVersion}, Windows {Environment.OSVersion.Version}, {(Environment.Is64Process ? "x64" : "x86")})");
+            + $" (v{AppLog.ApplicationVersion}, Windows {Environment.OSVersion.Version},"
+            + $" {(Environment.Is64BitProcess ? "x64" : "x86")})");
         _window = new MainWindow();
         _window.Activate();
     }
