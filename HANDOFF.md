@@ -1,26 +1,27 @@
 # 引き継ぎ文書 — Tkinter→WinUI機能移植 → Tkinter削除（次チャットスレッド向け）
 
-作成: 2026-10-18（v2.1.0.1 リリース直後）／更新: 2026-10-18（Phase 1〜4 実装後）
+作成: 2026-10-18（v2.1.0.1 リリース直後）／更新: 2026-10-18（Phase 1〜4 実装・CI全緑・PR #5 作成後）
 対象読者: 次スレッドの担当エージェント。まずこの文書を読んでから作業すること。
 
 ---
 
 ## 1. 現在の状態
 
-- **Phase 1〜4（機能移植）は実装済み・CI緑**。残りは **Phase 5（Tkinter一式の削除）だけ**
+- **Phase 1〜4（機能移植）は実装済み・CI全緑**（run [39106178218](https://github.com/burugou05-wq/PDF_conversion/actions/runs/39106178218)、HEAD `e10fd1f`）。残りは **Phase 5（Tkinter一式の削除）だけ**
 - ブランチ `arena/7d2f6c7c-pdf-conversion`（`arena/a9ee149b-pdf-conversion` = v2.1.0.1 の先端をfast-forwardで取り込み、その上にPhase 1〜4を積んだ）
 - バージョンは **2.1.1.0** に更新済み（`app_config.py` / `MainWindow.xaml` / `ImageToPDF.WinUI.csproj` / CHANGELOGの見出し）。**タグ `v2.1.1.0` はまだpushしていない**
 - リリース待ちの判断: 実機Windowsでの画面確認（グリッド・DPI・画像情報・ログ）が済んでからタグをpushするのが安全（VERIFICATION.mdの「画面の操作」参照）
 - 前のリリース: v2.1.0.1 https://github.com/burugou05-wq/PDF_conversion/releases/tag/v2.1.0.1
 - ローカル: 110 passed / 5 skipped / ruff clean（sandboxはLinux・Tk表示不可のためTk UIテストはskip）
-- GitHub上のPR: **#4（`arena/cdac77e1`、v2.1.0）がOPENのまま残っている**。中身は古い（v2.1.0.1もPhase 1〜4も含まない）。ユーザーの方針は「#4を閉じて、このブランチからmainへの新規PRを出す」
+- GitHub上のPR: **#5（`arena/7d2f6c7c-pdf-conversion` → `main`、v2.1.1.0）を作成済み**。**#4（v2.1.0）は閉じた**（#4のコミットは#5の履歴に含まれるため内容は失われない。ブランチは削除していない）。次は #5 のレビュー／マージ
 
 ## 2. 次スレッドのミッション
 
 > **「Tkinter版にあってWinUI版にない機能をWinUIへ段階的に追加し、揃ったらTkinterを消す」**
 
 - Phase 1〜4は完了（下記4節）。**Phase 5（削除）だけが残っている**。実行前に「実機でグリッド・DPI・ログを確認できたか」をユーザーに確認すること
-- v2.1.1.0のリリース（タグpush）がまだなら、それが先。タグはCI緑の確認後にのみpushする
+- **PR #5（v2.1.1.0 → main）のマージ**が次の作業。#4はクローズ済み
+- v2.1.1.0のリリース（タグpush）がまだ。タグはCI緑の確認後にのみpushする
 
 ## 3. アーキテクチャ（ファイル地図）
 
@@ -95,6 +96,12 @@ cli.py              コマンドライン版（第3の入り口）
 ## 6. 環境・デバッグの知見（重要）
 
 - **CIログの取得方法**: このsandboxからは `gh run view --log` が使えない（`results-receiver.actions.githubusercontent.com` / `release-assets.githubusercontent.com` がブロックされている）。**代わりに `gh api repos/{owner}/{repo}/check-runs/{job_id}/annotations` でエラー内容を取れる**（`build_winui.ps1` が `::error title=...::` で失敗詳細をannotationに出しているため）。`--jq '.[].message' | tr '|' '\n' | grep "error CS"` のように使う
+- **CIの監視方法**: `gh run watch <id> --exit-status` は**途中終了する**ことがある（実測47秒で返った）。`gh run view <id> --json status,conclusion` を `sleep 20` のループで回すこと。`gh run rerun` はこの環境では拒否される（「cannot be rerun; its workflow file may be broken」）ので、**再実行したいときは新しいコミットをpushする**。matrixは fail-fast なので、1ジョブが落ちると他は `cancelled` になる（`failure` と混同しないこと）
+- **Windows CI の Tk テストが不安定な件（対処済み）**: `windows-latest, 3.11` で `tests/test_ui.py` が2回赤くなった。**アプリのコードではなくランナーの Tcl インストール不具合**。連鎖は `can't find package tkdnd` → アプリが plain-Tk フォールバックへ → 壊れかけのインタプリタを destroy した後の2つ目の生成が `Can't find a usable init.tcl` で失敗。同じコミットでも 3.10/3.12/ubuntu は緑で、前のrunでは 3.11 も緑だった（machine依存のフレーク）
+  - 対処: `tests/test_ui.py` のモジュール読み込み時プローブを「plain Tk を1つ作って destroy → `TkinterDnD.Tk()` を作って destroy」という**起動シーケンスを真似る形**に変更し、`tk.TclError` ならモジュール全体をskip。`ImportError`/`RuntimeError`（tkinterdnd2未導入・非対応プラットフォーム）は従来どおりテストを走らせる
+  - **各テスト前にプローブする autouse fixture は逆効果だった**（余計なインタプリタ生成/破棄が増え、失敗が最後のテストから最初のテストへ前倒しになった）。プローブはモジュール読み込み時の1回だけにする
+  - `test_gui_falls_back_when_tkdnd_library_fails` だけは「わざとtkdndを壊す」テストなので、`tk.TclError` を捕まえて `pytest.skip` する個別ガードも残している
+  - この判定一式は Phase 5 で `tests/test_ui.py` ごと消える
 - **C#の構文チェック**: sandboxに .NET SDK は無いが、`.venv` に `tree-sitter` + `tree-sitter-c-sharp` を入れれば構文エラーを検出できる（型・メンバー名の誤りは検出できないので、それはCI頼み）
 - **ワーカートレース**: 環境変数 `IMAGETOPDF_WORKER_LOG=<path>` で `conversion_worker.py` が起動・プロトコル各段階をトレース出力
 - **アプリログのトレース**: 環境変数 `IMAGETOPDF_APP_LOG=<path>` で `AppLog.cs` の保存先を上書きできる（デバッグとCI検証用）
@@ -134,3 +141,4 @@ cli.py              コマンドライン版（第3の入り口）
 - v2.1.0.1開発: WinUI版を常駐ワーカー+stdin/stdout JSONプロトコル化（高速化）。セルフテストが3回タイムアウト → トレース追加で「C#リーダーがprogressでpendingを削除していた」ことが判明 → 修正（`a37e685`）で全緑・リリース
 - 2026-10-18: ユーザーが「Tkinter版の品質改善」を検討 → 実態調査（READMEでTk版は既に配布終了・WinUI版が正式）→ **機能移植後にTkinter削除する方針に決定**
 - 2026-10-18（このスレッド）: Phase 1（app.log）→ CIが `UnhandledExceptionEventArgs` の名前衝突を検出 → 修正。Phase 2（既定DPI）+ Phase 3（inspect/画像情報）→ CIが `Environment.Is64Process`（存在しない名前）を検出 → `Is64BitProcess` に修正して**CI全緑**（配布EXEでのapp.log記録・1MBローテーション・GUI起動ログの確認まで成功）。Phase 4（グリッド表示・サムネイルLRU・ワーカーの `thumbnailSize`）を実装。バージョンを2.1.1.0に上げ、CHANGELOG/README/VERIFICATIONを更新
+- 2026-10-18（このスレッド・続き）: Phase 4 込みのpushで `windows-latest, 3.11` のTkテストがランナーのTcl不具合で2回赤くなった（`2220580` のautouseプローブは逆効果だったので撤回）→ プローブを起動シーケンス模倣型にして `e10fd1f` で**CI全緑**（run 39106178218）。**PR #5 を作成、PR #4 をクローズ**（ユーザー方針どおり）。タグ `v2.1.1.0` は実機確認後にpushする方針で**未pushのまま**
