@@ -7,6 +7,8 @@ SUPPORTED_EXTS = frozenset(
     {
         ".jpg",
         ".jpeg",
+        ".jfif",
+        ".jpe",
         ".png",
         ".avif",
         ".heic",
@@ -21,9 +23,12 @@ SUPPORTED_EXTS = frozenset(
 
 
 def natural_key(path):
+    # re.split with a capture group yields non-digit parts at even indexes and
+    # digit runs at odd indexes. Classifying by position avoids str.isdigit(),
+    # which is True for characters such as "²" that int() then rejects.
     return tuple(
-        (1, int(part)) if part.isdigit() else (0, part.casefold())
-        for part in re.split(r"(\d+)", Path(path).name)
+        (1, int(part)) if index % 2 else (0, part.casefold())
+        for index, part in enumerate(re.split(r"(\d+)", Path(path).name))
     )
 
 
@@ -36,7 +41,10 @@ def list_images(folder, order="name"):
     if order == "number":
         return sorted(paths, key=natural_key)
     if order == "date":
-        return sorted(paths, key=lambda path: (path.stat().st_mtime, path.name), reverse=True)
+        # Newest first; ties keep ascending name order instead of reversing it.
+        paths.sort(key=lambda path: path.name.casefold())
+        paths.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        return paths
     return sorted(paths, key=lambda path: (path.name.casefold(), path.name))
 
 

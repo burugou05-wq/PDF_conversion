@@ -6,6 +6,7 @@ import queue
 import subprocess
 import sys
 import threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -13,6 +14,12 @@ from app_config import APP_NAME, VERSION
 from app_paths import log_directory
 from file_model import FileModel, list_images
 from ui_theme import COLORS, apply_theme
+
+# Kept for tests and diagnostics; holds the running Application instance.
+LAST_APPLICATION = None
+
+# Japanese display labels for the folder-mode sort orders.
+SORT_ORDERS = {"名前": "name", "番号順": "number", "更新日": "date"}
 
 
 def set_dpi_aware():
@@ -91,6 +98,10 @@ def main():
             self.root = root
             self.model = FileModel()
             self.folder = None
+            # Cached listing of the folder mode; refreshed only on explicit
+            # reloads so typing in the search box never rescans the directory.
+            self.folder_listing = []
+            self.folder_listed_for = None
             self.events = queue.Queue()
             self.cancel_event = threading.Event()
             self.worker = None
@@ -98,17 +109,18 @@ def main():
             self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="preview")
             self.preview_generation = 0
             self.pending_thumbnails = set()
-            self.thumbnail_cache = {}
+            self.thumbnail_cache = OrderedDict()
             self.grid_page = 0
             self.grid_selection = set()
             self.grid_anchor = None
             self.grid_cells = {}
             self.visible = []
             self.busy = False
+            self.drag_saved_selection = None
             self.query = tk.StringVar()
             self.output = tk.StringVar()
             self.view = tk.StringVar(value="list")
-            self.sort = tk.StringVar(value="name")
+            self.sort = tk.StringVar(value="名前")
             self.quality = tk.StringVar(value="original")
             self.paper = tk.StringVar(value="元のサイズ")
             self.margin = tk.StringVar(value="0")
@@ -161,7 +173,7 @@ def main():
                 textvariable=self.sort,
                 state="readonly",
                 width=10,
-                values=("name", "number", "date"),
+                values=tuple(SORT_ORDERS),
             )
             order.pack(side="left")
             order.bind("<<ComboboxSelected>>", lambda _: self.reload_folder())
@@ -303,7 +315,7 @@ def main():
 
         def current_paths(self):
             if self.is_folder_mode():
-                return list_images(self.folder, self.sort.get()) if self.folder else []
+                return list(self.folder_listing)
             return self.model.paths
 
         def change_tab(self, _=None):
@@ -313,11 +325,7 @@ def main():
             self.refresh()
 
         def refresh(self, selected=()):
-            try:
-                paths = self.current_paths()
-            except OSError as error:
-                messagebox.showerror("フォルダ読込エラー", str(error))
-                paths = []
+            paths = self.current_paths()
             self.visible = [
                 path for path in paths if self.query.get().casefold() in path.name.casefold()
             ]
@@ -382,6 +390,20 @@ def main():
                 self.reload_folder()
 
         def reload_folder(self):
+            if self.folder:
+                try:
+                    self.folder_listing = list_images(self.folder, SORT_ORDERS[self.sort.get()])
+                    self.folder_listed_for = self.folder
+                except OSError as error:
+                    # Keep the previous listing, but never show one that was
+                    # scanned from a different folder.
+                    if self.folder_listed_for != self.folder:
+                        self.folder_listing = []
+                        self.folder_listed_for = self.folder
+                    messagebox.showerror("フォルダ読込エラー", str(error))
+            else:
+                self.folder_listing = []
+                self.folder_listed_for = None
             self.grid_page = 0
             self.grid_selection.clear()
             self.refresh()
@@ -424,19 +446,34 @@ def main():
 
         def drag_start(self, event):
             self.drag_origin = self.tree.identify_row(event.y)
+            # The Treeview class binding replaces a multi-selection with the
+            # clicked row on button press. Widget bindings run first, so the
+            # selection can still be saved here and restored on drop.
+            selected_iids = set(self.tree.selection())
+            self.drag_saved_selection = (
+                {Path(value) for value in selected_iids}
+                if self.drag_origin and self.drag_origin in selected_iids
+                else None
+            )
 
         def drag_end(self, event):
             target = self.tree.identify_row(event.y)
-            if (
-                not self.is_folder_mode()
-                and self.drag_origin
-                and target
-                and target != self.drag_origin
-            ):
-                selected = self.selected() or {Path(self.drag_origin)}
-                self.model.move_before(selected, Path(target))
-                self.refresh(selected)
+            origin = self.drag_origin
+            saved = self.drag_saved_selection
             self.drag_origin = None
+            self.drag_saved_selection = None
+            if (
+                self.is_folder_mode()
+                or not origin
+                or not target
+                or target == origin
+            ):
+                return
+            selected = saved or (self.selected() or {Path(origin)})
+            if saved:
+                self.tree.selection_set([str(path) for path in saved])
+            self.model.move_before(selected, Path(target))
+            self.refresh(selected)
 
         def tree_selected(self, _):
             selection = self.tree.selection()
@@ -488,6 +525,8 @@ def main():
                 for widget in (cell, label, caption):
                     widget.bind("<Button-1>", lambda event, item=path: self.grid_click(event, item))
                 if path in self.thumbnail_cache:
+                    # Most recently used thumbnails survive eviction (LRU).
+                    self.thumbnail_cache.move_to_end(path)
                     self.apply_thumbnail(path, self.thumbnail_cache[path])
                 elif path not in self.pending_thumbnails:
                     self.pending_thumbnails.add(path)
@@ -615,8 +654,9 @@ def main():
                         if not self.closing:
                             photo = ImageTk.PhotoImage(image, master=root) if image else None
                             self.thumbnail_cache[path] = photo
+                            # Evict the least recently used thumbnails.
                             while len(self.thumbnail_cache) > 100:
-                                self.thumbnail_cache.pop(next(iter(self.thumbnail_cache)))
+                                self.thumbnail_cache.popitem(last=False)
                             self.apply_thumbnail(path, photo)
                         if image:
                             image.close()
@@ -677,7 +717,8 @@ def main():
             self.executor.shutdown(wait=False, cancel_futures=True)
             self.status.config(text="終了処理中…")
 
-    Application()
+    global LAST_APPLICATION
+    LAST_APPLICATION = Application()
     root.mainloop()
     return 0
 

@@ -34,7 +34,11 @@ public sealed partial class MainWindow : Window
         var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this));
         AppWindow.GetFromWindowId(windowId).Resize(new Windows.Graphics.SizeInt32(1320, 860));
         UpdateListState();
-        Closed += (_, _) => _conversionCancellation?.Cancel();
+        Closed += (_, _) =>
+        {
+            _conversionCancellation?.Cancel();
+            _worker.Dispose();
+        };
     }
 
     private async void AddFilesButton_Click(object sender, RoutedEventArgs e)

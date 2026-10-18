@@ -1,4 +1,22 @@
-"""JSONL worker entry point used by the WinUI frontend."""
+"""JSONL worker entry point used by the WinUI frontend.
+
+One-shot mode (compatibility and debugging)::
+
+    conversion_worker.py --request request.json
+
+Reads a single JSON request file, writes JSON response lines to stdout and
+exits. A ``{"type": "cancel"}`` line on stdin cancels the running request.
+
+Server mode (default, no arguments)::
+
+    conversion_worker.py
+
+Reads one JSON request per line from stdin and answers with one JSON response
+line per event on stdout, each tagged with the request's ``id``. The process
+stays alive until stdin closes, so the frontend pays the interpreter or EXE
+startup cost only once. Requests run on separate threads and are multiplexed
+by id; ``{"type": "cancel", "id": ...}`` cancels the matching request.
+"""
 
 import argparse
 import base64
@@ -14,8 +32,72 @@ from image_processor import ConversionCancelled, ConversionOptions, convert_to_p
 LOGGER = logging.getLogger("ImageToPDF.Worker")
 
 
-def emit(event_type, **values):
-    message = {"type": event_type, **values}
+def configure_streams():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
+def options_from_request(request):
+    values = request.get("options", {})
+    return ConversionOptions(
+        quality=values.get("quality", "original"),
+        page_size=values.get("pageSize"),
+        margin_mm=float(values.get("marginMm", 0)),
+        bg_color=tuple(values.get("background", [255, 255, 255])),
+        auto_rotate=bool(values.get("autoRotate", True)),
+    )
+
+
+def execute_request(request, cancel_event, emit):
+    """Run a single request, emitting response events through ``emit``.
+
+    Returns the one-shot process exit code: 0 success, 2 success with skips.
+    """
+    operation = request.get("operation", "convert")
+    image_paths = request.get("imagePaths", [])
+    if not isinstance(image_paths, list) or not image_paths:
+        raise ValueError("画像が指定されていません")
+
+    if operation == "thumbnail":
+        thumbnail = make_thumbnail(image_paths[0], (640, 480))
+        try:
+            with io.BytesIO() as buffer:
+                thumbnail.save(buffer, format="PNG")
+                emit("thumbnail", data=base64.b64encode(buffer.getvalue()).decode("ascii"))
+        finally:
+            thumbnail.close()
+        return 0
+    if operation != "convert":
+        raise ValueError("ワーカー操作が不正です")
+
+    output_path = request.get("outputPath", "")
+    if not isinstance(output_path, str) or not output_path:
+        raise ValueError("出力先が指定されていません")
+
+    result = convert_to_pdf(
+        image_paths,
+        output_path,
+        options=options_from_request(request),
+        overwrite=bool(request.get("overwrite", False)),
+        cancel_event=cancel_event,
+        progress_cb=lambda percent: emit("progress", percent=percent),
+    )
+    emit(
+        "completed",
+        outputPath=str(result.output_path),
+        pageCount=result.page_count,
+        skipped=[
+            {"path": str(item.path), "reason": item.reason}
+            for item in result.skipped
+        ],
+    )
+    return 2 if result.skipped else 0
+
+
+def write_message(event_type, request_id=None, **values):
+    message = {"type": event_type, "id": request_id, **values}
     sys.stdout.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n")
     sys.stdout.flush()
 
@@ -32,22 +114,9 @@ def listen_for_cancel(cancel_event):
             return
 
 
-def options_from_request(request):
-    values = request.get("options", {})
-    return ConversionOptions(
-        quality=values.get("quality", "original"),
-        page_size=values.get("pageSize"),
-        margin_mm=float(values.get("marginMm", 0)),
-        bg_color=tuple(values.get("background", [255, 255, 255])),
-        auto_rotate=bool(values.get("autoRotate", True)),
-    )
-
-
 def run(request_path):
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    if hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    """One-shot mode: execute a request file and exit."""
+    configure_streams()
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
     cancel_event = threading.Event()
@@ -55,60 +124,97 @@ def run(request_path):
 
     try:
         request = json.loads(Path(request_path).read_text(encoding="utf-8"))
-        operation = request.get("operation", "convert")
-        image_paths = request.get("imagePaths", [])
-        if not isinstance(image_paths, list) or not image_paths:
-            raise ValueError("画像が指定されていません")
-
-        if operation == "thumbnail":
-            thumbnail = make_thumbnail(image_paths[0], (640, 480))
-            try:
-                with io.BytesIO() as buffer:
-                    thumbnail.save(buffer, format="PNG")
-                    emit("thumbnail", data=base64.b64encode(buffer.getvalue()).decode("ascii"))
-            finally:
-                thumbnail.close()
-            return 0
-        if operation != "convert":
-            raise ValueError("ワーカー操作が不正です")
-
-        output_path = request.get("outputPath", "")
-        if not isinstance(output_path, str) or not output_path:
-            raise ValueError("出力先が指定されていません")
-
-        result = convert_to_pdf(
-            image_paths,
-            output_path,
-            options=options_from_request(request),
-            overwrite=bool(request.get("overwrite", False)),
-            cancel_event=cancel_event,
-            progress_cb=lambda percent: emit("progress", percent=percent),
-        )
+        return execute_request(request, cancel_event, write_message)
     except ConversionCancelled as error:
-        emit("cancelled", message=str(error))
+        write_message("cancelled", message=str(error))
         return 3
     except Exception as error:
         LOGGER.exception("Conversion worker failed")
-        emit("error", message=str(error) or type(error).__name__)
+        write_message("error", message=str(error) or type(error).__name__)
         return 1
 
-    emit(
-        "completed",
-        outputPath=str(result.output_path),
-        pageCount=result.page_count,
-        skipped=[
-            {"path": str(item.path), "reason": item.reason}
-            for item in result.skipped
-        ],
-    )
-    return 2 if result.skipped else 0
+
+class WorkerServer:
+    """Serve newline-delimited JSON requests on stdin until it closes."""
+
+    def __init__(self):
+        self._stdout_lock = threading.Lock()
+        self._requests = {}
+        self._lock = threading.Lock()
+
+    def emit(self, request_id, event_type, **values):
+        with self._stdout_lock:
+            write_message(event_type, request_id, **values)
+
+    def serve(self):
+        configure_streams()
+        logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                request = json.loads(line)
+            except json.JSONDecodeError:
+                LOGGER.warning("Ignoring malformed request line")
+                continue
+            if not isinstance(request, dict):
+                continue
+            request_id = request.get("id")
+            if request.get("type") == "cancel":
+                with self._lock:
+                    cancel_event = self._requests.get(request_id)
+                if cancel_event is not None:
+                    cancel_event.set()
+                continue
+            if not isinstance(request_id, str) or not request_id:
+                self.emit(None, "error", message="リクエストにidがありません")
+                continue
+            cancel_event = threading.Event()
+            # Register before dispatching so a cancel line that follows
+            # immediately cannot race the request thread.
+            with self._lock:
+                self._requests[request_id] = cancel_event
+            threading.Thread(
+                target=self._dispatch,
+                args=(request, request_id, cancel_event),
+                daemon=True,
+                name=f"request-{request_id}",
+            ).start()
+        return 0
+
+    def _dispatch(self, request, request_id, cancel_event):
+        try:
+            try:
+                execute_request(
+                    request,
+                    cancel_event,
+                    lambda event_type, **values: self.emit(request_id, event_type, **values),
+                )
+            except ConversionCancelled as error:
+                self.emit(request_id, "cancelled", message=str(error))
+            except Exception as error:
+                LOGGER.exception("Conversion worker failed for request %s", request_id)
+                self.emit(request_id, "error", message=str(error) or type(error).__name__)
+        finally:
+            with self._lock:
+                self._requests.pop(request_id, None)
 
 
 def main():
     parser = argparse.ArgumentParser(description="ImageToPDF WinUI conversion worker")
-    parser.add_argument("--request", type=Path, required=True, help="UTF-8 JSON request file")
+    parser.add_argument(
+        "--request",
+        type=Path,
+        help="Run a single UTF-8 JSON request file and exit (default: serve requests on stdin)",
+    )
     arguments = parser.parse_args()
-    return run(arguments.request)
+    if arguments.request is not None:
+        return run(arguments.request)
+    return WorkerServer().serve()
 
 
 if __name__ == "__main__":

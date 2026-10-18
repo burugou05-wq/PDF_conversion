@@ -36,6 +36,8 @@ def test_release_packager_creates_both_assets_and_checksums(tmp_path):
         assert f"{PORTABLE_BUNDLE_NAME}/{APP_NAME}.exe" in names
         assert f"{PORTABLE_BUNDLE_NAME}/{PORTABLE_MARKER}" in names
         assert f"{PORTABLE_BUNDLE_NAME}/PORTABLE.txt" in names
+        assert f"{PORTABLE_BUNDLE_NAME}/LICENSE" in names
+        assert f"{PORTABLE_BUNDLE_NAME}/THIRD_PARTY_NOTICES.md" in names
         assert f"{PORTABLE_BUNDLE_NAME}/_internal/python-library.pyd" in names
         assert not any(f"/{PORTABLE_DATA_DIRECTORY}/" in name for name in names)
 

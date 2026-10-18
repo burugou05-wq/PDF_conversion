@@ -12,8 +12,8 @@ This folder contains the first native Windows UI implementation. It is intention
 
 - `MainWindow.xaml` / `.xaml.cs`: WinUI presentation and Windows pickers.
 - `ViewModels/MainViewModel.cs`: file queue, filtering, folder sorting, and order changes.
-- `Services/ConversionWorkerService.cs`: starts the Python worker without showing a console, streams progress, and sends cooperative cancellation.
-- `../../conversion_worker.py`: JSON request + JSON Lines response adapter over the existing `image_processor.py` conversion engine. Thumbnail requests use Pillow too, including formats Windows may not preview natively.
+- `Services/ConversionWorkerService.cs`: keeps one resident Python worker alive (stdin JSONL requests, stdout JSONL responses multiplexed by request id), streams progress, and sends cooperative cancellation per request. The worker is assigned to a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so it cannot outlive the app, and it is restarted automatically if it exits unexpectedly.
+- `../../conversion_worker.py`: conversion engine adapter. Without arguments it serves newline-delimited JSON requests until stdin closes; `--request <file>` runs a single request and exits (used by tests and debugging). Thumbnail requests use Pillow too, including formats Windows may not preview natively.
 
 The existing Tkinter application and CLI are left intact while this frontend is being validated.
 

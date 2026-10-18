@@ -53,6 +53,11 @@ def create_portable_archive(bundle_directory: Path, archive_path: Path, version=
         "Store app-owned data next to this executable.\n", encoding="utf-8"
     )
     (bundle_directory / "PORTABLE.txt").write_text(portable_readme(version), encoding="utf-8")
+    # Ship the licenses that redistribution requires next to the binary.
+    for notice in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
+        source = HERE / notice
+        if source.is_file():
+            shutil.copy2(source, bundle_directory / notice)
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(
         archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6

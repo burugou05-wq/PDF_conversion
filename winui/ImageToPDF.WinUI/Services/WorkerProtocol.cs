@@ -28,6 +28,9 @@ public sealed class WorkerOptions
 
 public sealed class WorkerMessage
 {
+    /// <summary>Id of the request this message answers; null for unrelated output.</summary>
+    public string? Id { get; init; }
+
     public string Type { get; init; } = string.Empty;
 
     public int Percent { get; init; }
