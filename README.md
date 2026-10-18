@@ -1,4 +1,4 @@
-# 画像 → PDF 変換ツール v2.1.1.0
+# 画像 → PDF 変換ツール v2.2.0.0
 
 Windows 11向けのネイティブ画面（WinUI 3）で、画像を並べてPDFにまとめるツールです。画像の追加・フォルダー追加、順番変更、検索、リスト／グリッド表示、プレビューと画像情報（寸法・DPI・ICC）、ドラッグ＆ドロップに対応します。CLIからも同じ変換エンジンを利用できます。
 
@@ -9,7 +9,7 @@ Windows 11向けのネイティブ画面（WinUI 3）で、画像を並べてPDF
 [最新のGitHub Release](https://github.com/burugou05-wq/PDF_conversion/releases/latest) の「Assets」から、`ImageToPDF-v<version>-Windows-x64.exe` を1つだけダウンロードして実行してください。ZIPの展開や、Pythonのインストールは不要です。
 
 - 初回起動時、EXE内の変換エンジンを `%LOCALAPPDATA%\ImageToPDF\worker` に展開します。
-- 正式版はWinUI 3版です。従来のTkinter版は v2.1.0 で配布を終了しました（ソースは互換性確認用に残しています）。
+- 正式版はWinUI 3版です。Tkinter版は v2.1.0 で配布を終了し、v2.2.0.0 でソースコードを削除してWinUI 3版に一本化しました。
 - 正式配布EXEにコード署名はありません。警告が出た場合は入手元を確認し、セキュリティソフトが危険と判定したファイルは実行しないでください。
 - 同じ Release の `SHA256SUMS.txt` で、ダウンロードしたEXEのSHA-256を確認できます。
 
@@ -20,7 +20,7 @@ Windows 11向けのネイティブ画面（WinUI 3）で、画像を並べてPDF
 - Windows 10（2004 / ビルド19041以降）または Windows 11、64bit（x64）
 - EXE利用時: Pythonのインストール不要
 - ソース実行・ビルド: Python 3.10〜3.12（推奨3.11）。WinUI版のビルドには .NET 8 SDK と Visual Studio 2022 のMSBuildが必要です
-- CLIと変換テストはLinuxでも実行可能（Tk版GUIにはTkとディスプレイが必要）
+- CLIと変換テストはLinuxでも実行可能
 
 ## 開発の起動
 
@@ -31,11 +31,9 @@ Python変換エンジンのテストや CLI は、PowerShellでこのフォル�
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-# AVIF/HEIFとドラッグ＆ドロップを使う場合（Tk版）
+# AVIF/HEIFを使う場合
 .\.venv\Scripts\python.exe -m pip install -r requirements-optional.txt
 ```
-
-従来のTkinter版は `img2pdf_app.py` から起動できます（参考・互換用）。
 
 基本対応形式: JPEG / PNG / WebP / BMP / GIF / TIFF。
 AVIF対応はPillowの機能または追加プラグイン、HEIF/HEIC対応は追加プラグインが必要です。利用できない形式は理由付きでスキップされます。
@@ -106,8 +104,6 @@ Windows 11 / 10 x64 で、PowerShellから次を実行します。Python 3.10〜
 - 日本語パスの画像を、埋め込みワーカーでPDFに変換できること
 - ウィンドウが表示されて起動できること
 
-従来のTkinter版は `build.py`（PyInstaller、ローカル用）から引き続きビルドできますが、正式配布の対象ではありません。両者とも `dist\` に `ImageToPDF-v<version>-Windows-x64.exe` を出力するため、同じフォルダーで両方をビルドする場合は名前を変えて保存してください。
-
 GitHub Actions（`ci.yml`）は、テスト成功後に上記のWinUI版をビルドします。`app_config.py` のバージョンに一致する `v<バージョン>` タグをpushすると、そのEXEと `SHA256SUMS.txt` をGitHub Releaseに公開します。CHANGELOG.mdの該当セクションがリリースノートになります。既存ReleaseのAssetsは、タグをpushしただけでは変更されません。
 
 ## WinUI 3版の開発
@@ -140,14 +136,13 @@ CIはWindows/LinuxのPython 3.10〜3.12でテストし、Windows上でWinUI版�
 
 構成:
 
-- `winui/ImageToPDF.WinUI/`: 正式版のWinUI 3画面（C#）
-- `conversion_worker.py`: WinUI版から呼び出す変換ワーカー（JSON Lines）。PyInstallerで `ImageToPDFWorker.exe` にしてEXEへ埋め込みます
+- `winui/ImageToPDF.WinUI/`: WinUI 3画面（C#）
+- `conversion_worker.py`: 変換ワーカー（JSON Lines）。PyInstallerで `ImageToPDFWorker.exe` にしてEXEへ埋め込みます
 - `image_processor.py`: 変換エンジン（画像処理、PDF配置、安全な保存）
 - `cli.py`: CLI（Pythonソースから実行）
-- `img2pdf_app.py`, `file_model.py`, `ui_theme.py`: 従来のTkinter版（互換用）
-- `app_config.py`: 名前・バージョン・配布設定
-- `app_paths.py`: Tkinter版のログ保存先（ポータブル版はアプリフォルダー内）。WinUI版のログ保存先はC#側（`Services/AppLog.cs`）で解決します
-- `tests/`: 選択操作、用紙寸法、画像処理、キャンセル、配布パス、ワーカープロトコルの回帰テスト
+- `file_model.py`: ファイル一覧の管理と並び替え（CLIでも利用）
+- `app_config.py`: 名前・バージョン
+- `tests/`: 選択操作、用紙寸法、画像処理、キャンセル、ワーカープロトコルの回帰テスト
 - `build_winui.ps1`: 正式版のWinUI単一EXEのビルドと検証
 
 ## 制限・運用
@@ -156,6 +151,6 @@ CIはWindows/LinuxのPython 3.10〜3.12でテストし、Windows上でWinUI版�
 - グリッド表示のサムネイルは、画面に見えている分だけを作り、最近使った順に最大128枚をメモリに保持します。上限を超えた分は解放し、再び表示されるときに作り直します。
 - 画像前処理は逐次実行し、巨大画像の同時展開を避けます。ただしPDF結合のオブジェクトはメモリに保持されるため、無制限の大量画像処理を保証しません。
 - 画像パーサーの安全性のため、Pillowの巨大画像保護を無効にしていません。
-- ログ: 起動、変換の開始・完了・キャンセル・失敗理由、スキップした画像、ワーカーの起動と終了を `%LOCALAPPDATA%\ImageToPDF\app.log` に記録します（WinUI版・Tkinter版とも）。1MBを超えると `app.log.1`〜`app.log.3` へ繰り下げ、最大4ファイル（約4MB）まで保持します。Tkinter版のポータブル版は実行ファイルの隣の `PortableData\app.log` です。画像パスや失敗理由を含むため、共有前に内容を確認してください。
+- ログ: 起動、変換の開始・完了・キャンセル・失敗理由、スキップした画像、ワーカーの起動と終了を `%LOCALAPPDATA%\ImageToPDF\app.log` に記録します。1MBを超えると `app.log.1`〜`app.log.3` へ繰り下げ、最大4ファイル（約4MB）まで保持します。画像パスや失敗理由を含むため、共有前に内容を確認してください。
 - WinUI版が展開する変換エンジンは `%LOCALAPPDATA%\ImageToPDF\worker` にあります。古いバージョンのフォルダーは自動では削除しません。不要になったら手動で削除できます。
 - 配布ライセンスはMIT Licenseです。依存ライブラリの条件（img2pdfのLGPL、pillow-heifバイナリwheelのGPLv2など）は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。
