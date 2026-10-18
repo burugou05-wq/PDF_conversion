@@ -166,10 +166,18 @@ public sealed class ConversionWorkerService : IDisposable
                 }
 
                 PendingRequest? pending;
+                var terminal = message.Type is "completed" or "thumbnail" or "cancelled" or "error";
                 lock (_gate)
                 {
-                    if (_pending.TryGetValue(message.Id, out pending))
+                    if (!_pending.TryGetValue(message.Id, out pending))
                     {
+                        // Unknown or already-finished id (for example a second
+                        // terminal event after an error); nothing to do.
+                    }
+                    else if (terminal)
+                    {
+                        // Progress events keep the entry alive so that the
+                        // terminal event can still complete the caller.
                         _pending.Remove(message.Id);
                     }
                 }
