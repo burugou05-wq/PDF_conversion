@@ -107,7 +107,7 @@
             </StackPanel>
             <TextBlock
                 Grid.Column="1"
-                Text="v2.1.0.1"
+                Text="v2.1.1.0"
                 VerticalAlignment="Center"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
         </Grid>
