@@ -1,5 +1,23 @@
 # 更新履歴
 
+## v2.2.0.0 — Tkinter版を削除し、WinUI 3版に一本化
+
+v2.1.0 で配布を終了していたTkinter版のソースコードを削除し、WinUI 3版に一本化しました。変換エンジン（`image_processor.py` / `conversion_worker.py`）とできあがるPDFの仕様は v2.1.1.0 から変わっていません。
+
+### 削除したもの
+
+- Tkinter版のUI本体（`img2pdf_app.py` / `ui_theme.py`）と、そのテスト（`tests/test_ui.py`）
+- 旧ビルド一式（`build.py` / `build.ps1` / `ImageToPDF.spec` / `tests/test_build.py`）
+- ポータブル版のログ解決処理（`app_paths.py` / `tests/test_app_paths.py`）と `app_config.py` のポータブル用定数
+- 任意依存の `tkinterdnd2`（`requirements-optional.txt` / `THIRD_PARTY_NOTICES.md`）
+
+WinUI 3版の画面・操作・ログ（`%LOCALAPPDATA%\ImageToPDF\app.log` の1MB×3世代ローテーション）・ビルド手順（`build_winui.ps1`）はこれまでどおりです。CLI（`cli.py`）と変換エンジンの使い方も変わりません。
+
+### 開発・検証
+
+- `file_model.py`（一覧の管理・並び替え）はCLIが利用するため残しています。
+- Windows CIの不安定要因だったTk関連のskip判定がなくなり、テストは6ジョブすべてで安定して実行されます。
+
 ## v2.1.1.0 — WinUI版にTkinter版の機能を移植（ログ・既定DPI・画像情報・グリッド）
 
 正式版のWinUI 3版に、これまでTkinter版にしか無かった機能を移植しました。変換エンジンと、できあがるPDFの仕様は v2.1.0.1 から変わっていません。

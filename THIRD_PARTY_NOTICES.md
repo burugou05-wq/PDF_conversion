@@ -32,7 +32,6 @@ EXEビルドではこれらも配布物に含まれます。
 | --- | --- | --- | --- |
 | [pillow-heif](https://github.com/bigcat88/pillow_heif) | 0.21.0 | ソース: BSD-3-Clause / **バイナリwheel: GPLv2** | wheelにlibheif・libde265（LGPLv3）、libx265（GPLv2）、libaom（BSD-2 + AOM特許条項）、libgcc/libstdc++（GCC runtime exception）が同梱される |
 | [pillow-avif-plugin](https://github.com/fdintino/pillow-avif-plugin) | 1.5.0 | MIT License | libaom（BSD-2 + AOM特許条項）を含む |
-| [tkinterdnd2](https://github.com/Eliav2/tkinterdnd2) | 0.4.3 | MIT License | 同梱のtkdndバイナリはTk/BSD系のライセンスに従う |
 
 ### 重要: pillow-heif のバイナリwheelはGPLv2です
 

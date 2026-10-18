@@ -51,3 +51,19 @@
 - 複数選択ドラッグの選択保持を修正、natural_keyを位置ベース判定に変更。
 - WinUIワーカーを常駐化（リクエストID多重化）し、Job Objectで寿命管理。
 - LICENSE（MIT）とTHIRD_PARTY_NOTICES.mdを追加。ActionsをSHA固定しDependabotを導入。
+
+## v2.1.1.0 での追加改善（Tkinter版の機能をWinUI版へ移植）
+
+- `Services/AppLog.cs` を追加。app.log（1MB×3世代のローテーション）をPython非依存のC#だけで実装。
+- ワーカーに `inspect`（画像情報）と `thumbnailSize`（サムネイル寸法）を追加。終端イベント判定とswitchの両方に登録。
+- 「DPI不明時の既定値」（1〜10000）をNumberBoxで指定可能にし、範囲外は変換前に拒否。
+- プレビュー下の画像情報表示（寸法・フレーム数・DPI取得元・元寸法mm・ICC）。
+- リスト／グリッド表示の切り替え。サムネイルは仮想化（`ContainerContentChanging`）+ LRU 128枚、実現中のタイルは追い出さない。
+
+## v2.2.0.0 での整理（Tkinter版の削除）
+
+- Tkinter版のUI（`img2pdf_app.py` / `ui_theme.py`）、旧ビルド（`build.py` / `build.ps1` / `ImageToPDF.spec` / `dpi_aware.manifest`）、ポータブル版のログ解決（`app_paths.py`）と対応テストを削除。
+- `app_config.py` は `APP_NAME` と `VERSION` だけにした（`APP_DATA_DIRECTORY` / `PORTABLE_*` は利用者が消えた）。
+- 任意依存から `tkinterdnd2` を削除し、THIRD_PARTY_NOTICES.md とロックファイルも追随。
+- Windows CIのTk起動skip判定（ランナーのTcl欠損workaround）が消え、テストは 105 passed / 0 skipped で安定。
+- 変換エンジン（`image_processor.py` / `conversion_worker.py` / `ConversionWorker.spec`）とCLI（`cli.py` / `file_model.py`）は変更なし。

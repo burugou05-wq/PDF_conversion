@@ -1,21 +1,18 @@
-# v2.1.1.0 検証結果
+# v2.2.0.0 検証結果
 
 ## 対象
 
-- 正式版: WinUI 3版（単一EXE `ImageToPDF-v2.1.1.0-Windows-x64.exe`）
-- 今回の変更: Tkinter版にあってWinUI版に無かった機能の移植（Phase 1〜4）
-  - Phase 1: 操作ログ（`app.log`、1MB×3世代のローテーション）
-  - Phase 2: DPI不明時の既定値（1〜10000）
-  - Phase 3: 画像情報の表示（寸法・フレーム数・DPIの取得元・元寸法・ICC）
-  - Phase 4: グリッド表示（サムネイル、LRU 128枚、仮想化による遅延読み込み）
-- 変換エンジン（`image_processor.py`）の出力仕様は v2.1.0.1 から変更していません。ワーカーに追加したのは `inspect` 操作と `thumbnailSize` の指定だけで、`convert` の挙動は同じです。
+- 正式版: WinUI 3版（単一EXE `ImageToPDF-v2.2.0.0-Windows-x64.exe`）
+- 今回の変更: Tkinter版の削除とWinUI 3版への一本化（Phase 5）
+  - 削除: `img2pdf_app.py` / `ui_theme.py` / `build.py` / `ImageToPDF.spec` / `app_paths.py` / `tests/test_ui.py` / `tests/test_build.py` / `tests/test_app_paths.py` / `requirements-optional.txt` の `tkinterdnd2`
+  - 変換エンジン（`image_processor.py`）とワーカー（`conversion_worker.py` / `ConversionWorker.spec`）の出力仕様は v2.1.1.0 から変更していません
+  - `file_model.py` はCLIが利用するため残しています
 
 ## 自動テスト（Linux / Python 3.11）
 
-- `python -m pytest -q`: **110 passed, 5 skipped**（Tk GUIのテストはディスプレイがないためskip、AVIF/HEIFはオプションのためskip）
+- `python -m pytest -q`: **105 passed, 0 skipped**（Tk GUIのテストは削除したためskipなし）
 - `python -m ruff check .`: **All checks passed**
-- 追加したテスト: ワーカーの `inspect`（寸法・DPI・ICC、既定DPIの反映、範囲外の既定DPIの拒否、サーバーモードでの終端イベント）と `thumbnailSize`（指定寸法の反映、既定の640×480、範囲外の拒否）
-- Windows CIでは同一スイートがPython 3.10〜3.12で実行され、Tk GUIのテストも含まれます。
+- Windows CIでは同一スイートがPython 3.10〜3.12で実行されます。
 - このリポジトリのLinux環境には .NET SDK がないため、C#は構文解析（tree-sitter）とWindows CIのコンパイル・セルフテストで検証します。
 
 ## 画面の操作（Windows実機での確認が必要なもの）
@@ -52,5 +49,5 @@ CIはコンパイルと起動、パッケージEXEの変換までしか確認で
 
 ## リリース手順
 
-- `app_config.py` の `VERSION`、`MainWindow.xaml` のバージョン表示、`ImageToPDF.WinUI.csproj` の `Version`、CHANGELOGの `## v2.1.1.0 ` 見出しを一致させます。
-- CIが緑になったことを確認してからタグ `v2.1.1.0` をプッシュします（緑の前にタグを打たないこと）。CIがビルドしたEXEとNOTICESでGitHub Releaseを作成します（リリースノートはCHANGELOGの該当セクションから生成）。
+- `app_config.py` の `VERSION`、`MainWindow.xaml` のバージョン表示、`ImageToPDF.WinUI.csproj` の `Version`、CHANGELOGの `## v2.2.0.0 ` 見出しを一致させます。
+- CIが緑になったことを確認してからタグ `v2.2.0.0` をプッシュします（緑の前にタグを打たないこと）。CIがビルドしたEXEとNOTICESでGitHub Releaseを作成します（リリースノートはCHANGELOGの該当セクションから生成）。
