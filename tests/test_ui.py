@@ -99,7 +99,8 @@ def test_folder_search_filters_cached_listing_without_rescan(monkeypatch, tmp_pa
         app.reload_folder()
         assert len(scans) == 1
         assert app.tree.get_children() == tuple(
-            str(path) for path in sorted(tmp_path.glob("*"), key=lambda p: p.name)
+            str(path.resolve())
+            for path in sorted(tmp_path.glob("*"), key=lambda p: p.name.casefold())
         )
         # Typing in the search box must filter the cached listing only.
         app.query.set("beta")
@@ -149,6 +150,16 @@ def test_multi_selection_drag_moves_all_selected_rows(monkeypatch, tmp_path):
         # class binding collapses it to the pressed row.
         rows = {11: resolved[0], 33: resolved[2]}
         monkeypatch.setattr(tree, "identify_row", lambda y: rows.get(y, ""))
+        # A probe bound after drag_end's own binding records the selection as
+        # our handler restored it, before the Treeview class binding reacts to
+        # the synthetic release (on a mapped window it may re-select the row
+        # under the pointer, which is outside this app's control).
+        probe = {}
+        tree.bind(
+            "<ButtonRelease-1>",
+            lambda _event: probe.setdefault("selection", set(tree.selection())),
+            add=True,
+        )
         tree.event_generate("<ButtonPress-1>", x=5, y=11)
         tree.update()
         assert app.drag_saved_selection == {Path(resolved[0]), Path(resolved[3])}
@@ -162,7 +173,7 @@ def test_multi_selection_drag_moves_all_selected_rows(monkeypatch, tmp_path):
             resolved[3],
             resolved[2],
         ]
-        assert set(tree.selection()) == {resolved[0], resolved[3]}
+        assert probe["selection"] == {resolved[0], resolved[3]}
         root.destroy()
 
     monkeypatch.setattr(tk.Tk, "mainloop", smoke)
