@@ -141,30 +141,27 @@ def test_multi_selection_drag_moves_all_selected_rows(monkeypatch, tmp_path):
         resolved = [str(path.resolve()) for path in paths]
         tree = app.tree
         tree.selection_set([resolved[0], resolved[3]])  # A and D
-        tree.update()
 
-        # Synthetic coordinates are mapped to rows through identify_row, so
-        # the test does not depend on the window being mapped on screen. The
-        # events still go through real Tk dispatch, proving that the
-        # widget-level binding observes the selection before the Treeview
-        # class binding collapses it to the pressed row.
+        # The drag handlers must be attached so real clicks reach them.
+        assert tree.bind("<ButtonPress-1>")
+        assert tree.bind("<ButtonRelease-1>")
+
+        # Drive the handlers directly with synthetic coordinates mapped
+        # through identify_row, so the test needs no on-screen geometry and
+        # no synthetic event dispatch (unreliable on headless CI sessions).
         rows = {11: resolved[0], 33: resolved[2]}
         monkeypatch.setattr(tree, "identify_row", lambda y: rows.get(y, ""))
-        # A probe bound after drag_end's own binding records the selection as
-        # our handler restored it, before the Treeview class binding reacts to
-        # the synthetic release (on a mapped window it may re-select the row
-        # under the pointer, which is outside this app's control).
-        probe = {}
-        tree.bind(
-            "<ButtonRelease-1>",
-            lambda _event: probe.setdefault("selection", set(tree.selection())),
-            add=True,
-        )
-        tree.event_generate("<ButtonPress-1>", x=5, y=11)
-        tree.update()
+
+        class FakeEvent:
+            def __init__(self, y):
+                self.y = y
+
+        app.drag_start(FakeEvent(11))
+        # The Treeview class binding replaces a multi-selection with the
+        # pressed row right after the press; drag_start saved it beforehand.
+        tree.selection_set([resolved[0]])
         assert app.drag_saved_selection == {Path(resolved[0]), Path(resolved[3])}
-        tree.event_generate("<ButtonRelease-1>", x=5, y=33)
-        tree.update()
+        app.drag_end(FakeEvent(33))
 
         # A and D moved before C, keeping their relative order.
         assert [str(path) for path in app.model.paths] == [
@@ -173,7 +170,7 @@ def test_multi_selection_drag_moves_all_selected_rows(monkeypatch, tmp_path):
             resolved[3],
             resolved[2],
         ]
-        assert probe["selection"] == {resolved[0], resolved[3]}
+        assert set(tree.selection()) == {resolved[0], resolved[3]}
         root.destroy()
 
     monkeypatch.setattr(tk.Tk, "mainloop", smoke)

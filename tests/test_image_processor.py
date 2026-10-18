@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 from pypdf import PdfReader
 
+import image_processor
 from image_processor import (
     MM_TO_PT,
     ConversionCancelled,
@@ -438,9 +439,11 @@ def test_publish_reports_success_when_temp_cleanup_fails(tmp_path):
     output = tmp_path / "out.pdf"
     with patch("image_processor._unlink_quietly") as cleanup:
         result = convert_to_pdf([source], output)
-    assert result.page_count == 1
-    assert output.is_file()
-    cleanup.assert_called_once()
+        assert result.page_count == 1
+        assert output.is_file()
+        # On Windows the staging file is consumed by the atomic rename; only
+        # the POSIX hard-link path needs the explicit cleanup attempt.
+        assert cleanup.call_count == (0 if image_processor.WINDOWS else 1)
 
 
 def test_layout_fun_recomputes_for_unexpected_extra_pages():
