@@ -131,24 +131,38 @@ function Test-SingleExeConversion {
     & python -c "from PIL import Image; import sys; Image.new('RGB', (37, 53), 'navy').save(sys.argv[1])" $ImagePath
     if ($LASTEXITCODE -ne 0) { throw "Could not create the single-file smoke-test image." }
 
-    $Process = Start-Process -FilePath $ExecutablePath `
-        -ArgumentList @("--selftest-convert", "`"$ImagePath`"", "`"$OutputPdf`"") `
-        -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
+    # The resident worker logs its startup/protocol steps when this variable
+    # is set; the log localizes EXE-only hangs that stderr cannot show.
+    $WorkerLog = "$OutputPdf.worker-log.txt"
+    if (Test-Path -LiteralPath $WorkerLog) { Remove-Item -LiteralPath $WorkerLog -Force }
+    $env:IMAGETOPDF_WORKER_LOG = $WorkerLog
+    try {
+        $Process = Start-Process -FilePath $ExecutablePath `
+            -ArgumentList @("--selftest-convert", "`"$ImagePath`"", "`"$OutputPdf`"") `
+            -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
+    }
+    finally {
+        Remove-Item Env:\IMAGETOPDF_WORKER_LOG -ErrorAction SilentlyContinue
+    }
+
+    function Get-SelftestDiagnostics {
+        $Parts = @()
+        foreach ($Log in @($WorkerLog, "$OutputPdf.selftest-log.txt", "$OutputPdf.selftest-error.txt")) {
+            if (Test-Path -LiteralPath $Log) {
+                $Parts += "[$([System.IO.Path]::GetFileName($Log))]`n$([System.IO.File]::ReadAllText($Log))"
+            }
+        }
+        if ($Parts.Count -eq 0) { return "no diagnostics were written" }
+        return $Parts -join "`n"
+    }
+
     try {
         if (-not $Process.WaitForExit(120000)) {
             $Process.Kill($true)
-            $SelftestLog = "$OutputPdf.selftest-log.txt"
-            $LogDetails = if (Test-Path -LiteralPath $SelftestLog) { [System.IO.File]::ReadAllText($SelftestLog) } else { "no selftest log was written" }
-            throw "Single-file conversion self-test timed out. Selftest log: $LogDetails"
+            throw "Single-file conversion self-test timed out. Diagnostics: $(Get-SelftestDiagnostics)"
         }
         if ($Process.ExitCode -ne 0) {
-            $ErrorFile = "$OutputPdf.selftest-error.txt"
-            $SelftestLog = "$OutputPdf.selftest-log.txt"
-            $Details = if (Test-Path -LiteralPath $ErrorFile) { [System.IO.File]::ReadAllText($ErrorFile) } else { "no details" }
-            if (Test-Path -LiteralPath $SelftestLog) {
-                $Details = "$Details`nSelftest log:`n$([System.IO.File]::ReadAllText($SelftestLog))"
-            }
-            throw "Single-file conversion self-test failed (exit code $($Process.ExitCode)): $Details"
+            throw "Single-file conversion self-test failed (exit code $($Process.ExitCode)). Diagnostics: $(Get-SelftestDiagnostics)"
         }
     }
     finally {

@@ -23,8 +23,10 @@ import base64
 import io
 import json
 import logging
+import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 from image_processor import (
@@ -36,6 +38,22 @@ from image_processor import (
 )
 
 LOGGER = logging.getLogger("ImageToPDF.Worker")
+
+
+def trace(message):
+    """Append a startup/protocol step to the file named by the environment.
+
+    Used by the WinUI self-test to localize stalls in packaged builds where
+    stderr is otherwise invisible.
+    """
+    log_path = os.environ.get("IMAGETOPDF_WORKER_LOG")
+    if not log_path:
+        return
+    try:
+        with open(log_path, "a", encoding="utf-8") as stream:
+            stream.write(f"{time.strftime('%H:%M:%S')} pid={os.getpid()} {message}\n")
+    except OSError:
+        pass
 
 
 def configure_streams():
@@ -156,12 +174,16 @@ class WorkerServer:
     def emit(self, request_id, event_type, **values):
         with self._stdout_lock:
             write_message(event_type, request_id, **values)
+        trace(f"emit: {event_type} id={request_id!r}")
 
     def serve(self):
+        trace("serve: configuring streams")
         configure_streams()
         logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+        trace(f"serve: stdin={sys.stdin!r} encoding={getattr(sys.stdin, 'encoding', None)}")
         while True:
             line = sys.stdin.readline()
+            trace(f"serve: read line of {len(line)} bytes")
             if not line:
                 break
             line = line.strip()
@@ -171,7 +193,9 @@ class WorkerServer:
                 request = json.loads(line)
             except json.JSONDecodeError:
                 LOGGER.warning("Ignoring malformed request line")
+                trace("serve: malformed request line ignored")
                 continue
+            trace(f"serve: parsed request type={request.get('type')!r} id={request.get('id')!r}")
             if not isinstance(request, dict):
                 continue
             request_id = request.get("id")
@@ -223,9 +247,15 @@ def main():
         help="Run a single UTF-8 JSON request file and exit (default: serve requests on stdin)",
     )
     arguments = parser.parse_args()
+    trace(f"main argv={sys.argv!r} frozen={getattr(sys, 'frozen', False)}")
     if arguments.request is not None:
+        trace(f"one-shot request file: {arguments.request}")
         return run(arguments.request)
-    return WorkerServer().serve()
+    try:
+        return WorkerServer().serve()
+    except Exception as error:
+        trace(f"serve crashed: {error!r}")
+        raise
 
 
 if __name__ == "__main__":
