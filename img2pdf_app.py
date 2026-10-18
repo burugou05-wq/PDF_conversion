@@ -87,7 +87,10 @@ def main():
 
         root = TkinterDnD.Tk()
         has_dnd = True
-    except (ImportError, tk.TclError):
+    except (ImportError, tk.TclError, RuntimeError):
+        # tkinterdnd2 re-raises Tcl-level load failures (including transient
+        # ones) as RuntimeError; drag-and-drop is optional, so fall back to a
+        # plain Tk root instead of crashing.
         root = tk.Tk()
         has_dnd = False
 
