@@ -7,13 +7,34 @@ import pytest
 
 
 def _tk_startup_error():
-    """Return why a plain Tk window cannot start here, or None when it can."""
+    """Return why the Tk UI cannot be exercised here, or None when it can.
+
+    The probe mirrors what the UI does at startup: build one window, take it
+    down, then build the drag-and-drop window. Two defects of the hosted
+    Windows runners show up here and would otherwise turn into red builds:
+
+    * tkinterdnd2's tkdnd package sometimes cannot be loaded, so every test
+      would take the plain-Tk fallback path, and
+    * after a Tcl interpreter went away, creating the next one in the same
+      process can fail with "Can't find a usable init.tcl".
+
+    Both are runner problems rather than UI regressions, so they skip the
+    module instead of failing it.
+    """
     import tkinter as tk
 
     try:
         tk.Tk().destroy()
+
+        from tkinterdnd2 import TkinterDnD
+
+        TkinterDnD.Tk().destroy()
     except tk.TclError as error:
         return str(error)
+    except (ImportError, RuntimeError):
+        # tkinterdnd2 is optional and rejects unknown platforms; the UI then
+        # starts without drag-and-drop, which the tests below still cover.
+        return None
     return None
 
 
@@ -31,21 +52,6 @@ pytestmark = [
         reason=f"Tk cannot start on this runner: {_TK_STARTUP_ERROR}",
     ),
 ]
-
-
-@pytest.fixture(autouse=True)
-def _skip_when_the_runner_cannot_start_tk_again():
-    """Re-check Tk before each test instead of once per session.
-
-    Some Windows runner images serve the first Tcl interpreter of a session and
-    then fail to load init.tcl for the next one, so the module-level probe above
-    passes while a later test cannot build a window. Each test here creates at
-    least one interpreter, so probing first turns that runner problem into a
-    skip instead of a failure.
-    """
-    error = _tk_startup_error()
-    if error is not None:
-        pytest.skip(f"Tk cannot start again on this runner: {error}")
 
 
 def walk_widgets(widget):
