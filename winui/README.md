@@ -56,3 +56,29 @@ PowerShellで次を実行します。
 - 実機のWindows 11での手動確認（エクスプローラーからのドラッグ＆ドロップ、キャンセル、AVIF/HEIFのサムネイル、Unicodeパス、別端末での起動）は、リリース前の確認項目として残ります。
 
 CI はWinUIのウィンドウ表示を確認しますが、画面の操作性や見た目の確認を代替するものではありません。
+
+## 開発メモ（デバッグ・CI・C#の落とし穴）
+
+### デバッグ用の環境変数とセルフテスト
+
+- `IMAGETOPDF_WORKER_LOG=<path>`: `conversion_worker.py` が起動とプロトコル各段階のトレースを出力します。EXEだけで起きるハングの切り分けに使います。
+- `IMAGETOPDF_APP_LOG=<path>`: `Services/AppLog.cs` の保存先を上書きします（デバッグとビルド検証用。実行機の `%LOCALAPPDATA%` を汚しません）。
+- `ImageToPDF.exe --selftest-convert <入力画像> <出力PDF>`: 終了コード0で成功。タイムラインは `<出力>.selftest-log.txt` に出ます。app.logの記録と1MBローテーションの確認もここで行います。
+
+### CI（GitHub Actions）の運用
+
+- 全体で約5〜7分（テスト6ジョブ → winui-build。セルフテスト込み）。
+- `gh run watch <id> --exit-status` は途中で返ることがあるため、`gh run view <id> --json status,conclusion` のポーリングで完了を待つほうが確実です。
+- ログ本体を取得できない環境では、`gh api repos/{owner}/{repo}/check-runs/{job_id}/annotations` で失敗詳細を読めます（`build_winui.ps1` が `::error title=...::` でannotationを出しているため）。
+- matrixは fail-fast なので、1ジョブが落ちると残りは `cancelled` になります（`failure` と混同しないこと）。
+- 再実行は「新しいコミットをpushする」のが確実です（`gh run rerun` は状況によって拒否されます）。
+- タグはCIが緑になったことを確認してからpushします。緑の前に打つと失敗がReleaseの履歴に残ります。
+
+### C#（WinUI）で過去に踏んだ落とし穴
+
+- ワーカーのstdinへは `StandardInput.BaseStream` に**UTF-8バイトを直書き**します（`StreamWriter` はGUIアプリでconsole codepageの問題を起こします）。
+- stdoutリーダーは**terminalメッセージ（completed / thumbnail / inspect / cancelled / error）が来るまでpendingエントリを保持**します。progressで削除すると完成メッセージが届かずタイムアウトします（v2.1.0.1で実際に発生）。**operationを追加したら、terminal判定とswitchの2箇所を必ず更新**してください。
+- ワーカーの死亡チェックは `HasExited` を `try/catch (InvalidOperationException)` で囲みます。
+- `Environment.Is64Process` は存在しません（正しくは `Is64BitProcess`）。`UnhandledExceptionEventArgs` は `Microsoft.UI.Xaml` と `System` で名前が衝突するため**完全修飾**します。
+- `TaskCompletionSource` に `TrySetCanceled(Exception)` はありません。
+- .NET SDKが無い環境では `tree-sitter` + `tree-sitter-c-sharp` で構文エラーを検出できます（型・メンバー名の誤りは検出できないため、そこはCI頼みです）。

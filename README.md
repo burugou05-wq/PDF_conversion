@@ -130,6 +130,15 @@ GitHub Actions（`ci.yml`）は、テスト成功後に上記のWinUI版をビ�
 CIはWindows/LinuxのPython 3.10〜3.12でテストし、Windows上でWinUI版の単一EXEを生成します。バージョンタグ（`v` + app_config.py のVERSION）からはGitHub Releaseも公開します。
 直接依存は固定しています。完全な推移依存ロックではありません。依存とGitHub Actionsの更新はDependabotが週次で提案します（ActionsはコミットSHAに固定しています）。
 
+Linux / macOS でCLIとテストを使う場合も、仮想環境を作ってから同じコマンドを実行します（システムのpipはPEP 668で拒否されることがあります）。
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt -r requirements-optional.txt
+.venv/bin/python -m pytest -q
+.venv/bin/python -m ruff check .
+```
+
 ## ライセンス
 
 このリポジトリのコードはMIT License（[LICENSE](LICENSE)）の下で公開しています。配布物に含まれる依存ライブラリのライセンスと、特にpillow-heifのバイナリwheel（GPLv2）に関する注意は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を確認してください。
@@ -148,6 +157,7 @@ CIはWindows/LinuxのPython 3.10〜3.12でテストし、Windows上でWinUI版�
 ## 制限・運用
 
 - 自己更新機能はありません。配布元から新しいEXEを手動で取得してください。
+- 変換設定の永続化（前回の値を覚える）はありません。起動時は初期値（元画質優先・元のサイズ・余白0mm・既定96dpi・白背景・自動回転あり）になります。
 - グリッド表示のサムネイルは、画面に見えている分だけを作り、最近使った順に最大128枚をメモリに保持します。上限を超えた分は解放し、再び表示されるときに作り直します。
 - 画像前処理は逐次実行し、巨大画像の同時展開を避けます。ただしPDF結合のオブジェクトはメモリに保持されるため、無制限の大量画像処理を保証しません。
 - 画像パーサーの安全性のため、Pillowの巨大画像保護を無効にしていません。
