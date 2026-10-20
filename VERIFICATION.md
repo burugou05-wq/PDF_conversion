@@ -47,7 +47,12 @@ CIはコンパイルと起動、パッケージEXEの変換までしか確認で
 - 6000×4000 JPEGのサムネイル生成（DCTスケーリング）約13ms
 - 解像度タグのないTIFF → DPI既定値を使用し、巨大ページにならない
 
+検証に使う実ICCプロファイル（SWOPなど第三者の配布物）はリポジトリにコミットしません。ローカルのe2e検証でのみ使用します。
+
 ## リリース手順
 
-- `app_config.py` の `VERSION`、`MainWindow.xaml` のバージョン表示、`ImageToPDF.WinUI.csproj` の `Version`、CHANGELOGの `## v2.2.0.0 ` 見出しを一致させます。
+- `app_config.py` の `VERSION`、`MainWindow.xaml` のバージョン表示、`ImageToPDF.WinUI.csproj` の `Version`、CHANGELOGの `## v2.2.0.0 ` 見出しを一致させます（`build_winui.ps1` が app_config と XAML の整合をチェックし、不一致だとCIが落ちます）。
 - CIが緑になったことを確認してからタグ `v2.2.0.0` をプッシュします（緑の前にタグを打たないこと）。CIがビルドしたEXEとNOTICESでGitHub Releaseを作成します（リリースノートはCHANGELOGの該当セクションから生成）。
+- リリースノートは `awk 'index($0, "## v<バージョン> ") == 1'` でCHANGELOGから抽出されます。見出しは必ず `## v<バージョン> ` + 半角スペース + タイトルの形にしてください。
+- publish-releaseジョブの成功と、Release資産4点（`ImageToPDF-v<バージョン>-Windows-x64.exe` / `SHA256SUMS.txt` / `LICENSE` / `THIRD_PARTY_NOTICES.md`）を確認します。
+- 依存ライブラリのバージョンを上げたときは、`THIRD_PARTY_NOTICES.md` の表も合わせて更新します（NOTICESはRelease資産として配布物に同梱されるため）。

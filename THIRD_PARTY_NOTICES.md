@@ -10,7 +10,7 @@
 | --- | --- | --- | --- |
 | [Pillow](https://github.com/python-pillow/Pillow) | 11.1.0 | MIT-CMU（HPND系の許諾ライセンス） | Copyright © 1997-2011 Secret Labs AB, © 1995-2011 Fredrik Lundh, © 2010 Jeffrey A. Clark and contributors |
 | [img2pdf](https://github.com/josch/img2pdf) | 0.6.0 | LGPL-3.0-or-later | Copyright © 2013-2024 Johannes Schauer Marin Rodrigues |
-| [pypdf](https://github.com/py-pdf/pypdf) | 5.3.0 | BSD-3-Clause | Copyright (c) 2006-2008 Mathieu Fenniak, (c) 2022-2025 pypdf contributors |
+| [pypdf](https://github.com/py-pdf/pypdf) | 6.20.1 | BSD-3-Clause | Copyright (c) 2006-2008 Mathieu Fenniak, (c) 2022-2025 pypdf contributors |
 
 ### img2pdf（LGPL-3.0-or-later）に関する配布上の注意
 
@@ -30,7 +30,7 @@ EXEビルドではこれらも配布物に含まれます。
 
 | ライブラリ | バージョン | ライセンス | 備考 |
 | --- | --- | --- | --- |
-| [pillow-heif](https://github.com/bigcat88/pillow_heif) | 0.21.0 | ソース: BSD-3-Clause / **バイナリwheel: GPLv2** | wheelにlibheif・libde265（LGPLv3）、libx265（GPLv2）、libaom（BSD-2 + AOM特許条項）、libgcc/libstdc++（GCC runtime exception）が同梱される |
+| [pillow-heif](https://github.com/bigcat88/pillow_heif) | 1.8.1 | ソース: BSD-3-Clause / **バイナリwheel: GPLv2** | wheelにlibheif v1.23.6・libde265 v1.1.3（LGPLv3）、x265 4.3（GPLv2）、MinGW-w64ランタイム（libgcc/libstdc++ は GPL-3.0-with-GCC-exception、libwinpthread は MIT/BSD）が同梱される。詳細はwheel内の `LICENSES_bundled.txt` 参照 |
 | [pillow-avif-plugin](https://github.com/fdintino/pillow-avif-plugin) | 1.5.0 | MIT License | libaom（BSD-2 + AOM特許条項）を含む |
 
 ### 重要: pillow-heif のバイナリwheelはGPLv2です
