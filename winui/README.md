@@ -15,6 +15,9 @@
 - `Services/ConversionWorkerService.cs`: 変換ワーカーを1つだけ起動して使い回します（stdinにJSON Linesリクエスト、stdoutからリクエストID付きの応答を受信）。進捗を画面へ流し、リクエスト単位で協調キャンセルを送ります。ワーカーは `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` のJob Objectに割り当てるためアプリが異常終了しても残らず、予期せず終了した場合は自動で再起動します。
 - `Services/EmbeddedWorker.cs`: 単一EXEに埋め込んだ `ImageToPDFWorker.exe` を `%LOCALAPPDATA%\ImageToPDF\worker\<ビルドID>\` に展開します。
 - `Services/AppLog.cs`: 起動、変換の開始・完了・キャンセル・失敗理由、スキップした画像、ワーカーの起動と終了を `%LOCALAPPDATA%\ImageToPDF\app.log` に記録します。1MB×3世代のローテーションで、Python側に依存せずC#だけで完結します。書き込みはベストエフォートで、失敗しても変換は止まりません。環境変数 `IMAGETOPDF_APP_LOG` で保存先を上書きできます（ビルド検証とデバッグ用）。
+- `Services/UpdateChecker.cs`: GitHub Release の最新版を取得・解析し、6時間キャッシュ（`%LOCALAPPDATA%\ImageToPDF\update-cache.json`）します。`ParseLatestRelease` は通信を含まない純粋な処理なので、自己診断から検証できます。
+- `Services/UpdateDownloader.cs`: 新しいEXEと `SHA256SUMS.txt` を `%LOCALAPPDATA%\ImageToPDF\updates\<タグ>\` へ取得し、サイズ・SHA-256・PE形式（MZ）を確認してから起動します。チェックサムが無いリリースは中止します。
+- `UpdateDialog.xaml` / `.cs`: バージョン表示から開く更新ダイアログ。現在のバージョン、確認時刻、リリースノート（Markdownを段落とリンクに変換）、進捗、更新ボタンを持ちます。開いたときに5分より古い情報なら取り直します。
 - `Services/SelfTest.cs`: ビルド検証用の `--selftest-convert <入力画像> <出力PDF>` の処理です。変換に加えて、app.log に記録が残り1MBで繰り下げられることも確認します。通常の利用では使いません。
 - `../../conversion_worker.py`: JSONリクエストを受け取り、JSON Linesで結果を返す変換ワーカーです。既存の `image_processor.py` を使います。引数なしで起動するとstdinが閉じるまでリクエストを処理し続け、`--request <ファイル>` は1リクエストだけ処理して終了します（テスト・デバッグ用）。操作は `convert`（既定）・`thumbnail`（`thumbnailSize` で寸法を指定、既定は640×480）・`inspect`（寸法・フレーム数・DPIの取得元・ICCの説明）の3つで、1リクエストにつき終端イベントを1つ返します。サムネイルもPillowで生成するため、Windowsがネイティブ表示できない形式にも対応します。
 
@@ -44,7 +47,7 @@ PowerShellで次を実行します。
 3. MSBuildでWinUI版を `PublishSingleFile` の self-contained として発行します。ワーカーはEXE内に埋め込まれます。
 4. 発行されたファイルがEXE1つだけであることを確認します。
 5. `dist\ImageToPDF-v<version>-Windows-x64.exe` と `dist\SHA256SUMS.txt` を作成します。
-6. そのEXEを単独で一時フォルダーにコピーし、埋め込みワーカーによる日本語パスのPDF変換、`app.log` への記録と1MBローテーション、ウィンドウの起動と起動ログの記録を確認します（ログは `IMAGETOPDF_APP_LOG` で一時ファイルへ向けるため、実行機のログは汚しません）。
+6. そのEXEを単独で一時フォルダーにコピーし、埋め込みワーカーによる日本語パスのPDF変換、`app.log` への記録と1MBローテーション、アップデート機能の自己診断（`--selftest-update`）、ウィンドウの起動と起動ログの記録を確認します（ログは `IMAGETOPDF_APP_LOG` で一時ファイルへ向けるため、実行機のログは汚しません）。
 
 ビルドにはWindowsと Windows App SDK の復元が必要です。CIは `windows-latest` で同じスクリプトを実行します。
 
@@ -63,6 +66,8 @@ CI はWinUIのウィンドウ表示を確認しますが、画面の操作性や
 
 - `IMAGETOPDF_WORKER_LOG=<path>`: `conversion_worker.py` が起動とプロトコル各段階のトレースを出力します。EXEだけで起きるハングの切り分けに使います。
 - `IMAGETOPDF_APP_LOG=<path>`: `Services/AppLog.cs` の保存先を上書きします（デバッグとビルド検証用。実行機の `%LOCALAPPDATA%` を汚しません）。
+- `IMAGETOPDF_DISABLE_UPDATE_CHECK=1`: 起動時のアップデート確認を止めます（ビルド検証・オフライン確認用）。バージョン表示からの手動確認は動きます。
+- `ImageToPDF.exe --selftest-update <ログ>`: ネットワークを使わず、リリース応答の解析・バージョン比較・SHA-256照合・更新ダイアログの生成を確認します。終了コード0で成功、`update selftest ok` をログに書きます。
 - `ImageToPDF.exe --selftest-convert <入力画像> <出力PDF>`: 終了コード0で成功。タイムラインは `<出力>.selftest-log.txt` に出ます。app.logの記録と1MBローテーションの確認もここで行います。
 
 ### CI（GitHub Actions）の運用

@@ -105,11 +105,35 @@
                     Style="{StaticResource BodyTextBlockStyle}"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </StackPanel>
-            <TextBlock
+            <!--
+                バージョン表示をタップすると更新ダイアログを開きます（Tab でも移動できます）。
+                新しい版があるときだけ、右上に青い点を出します。
+            -->
+            <Button
+                x:Name="VersionButton"
                 Grid.Column="1"
-                Text="v2.2.0.0"
+                Padding="10,4"
                 VerticalAlignment="Center"
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                Background="Transparent"
+                BorderThickness="0"
+                Click="VersionButton_Click"
+                ToolTipService.ToolTip="バージョン情報とアップデートを確認します"
+                AutomationProperties.Name="バージョン情報とアップデートを確認します">
+                <Grid>
+                    <TextBlock
+                        Text="v2.3.0.0"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Ellipse
+                        x:Name="UpdateBadge"
+                        Width="9"
+                        Height="9"
+                        Margin="0,-3,-8,0"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        Visibility="Collapsed"
+                        Fill="{ThemeResource AccentFillColorDefaultBrush}" />
+                </Grid>
+            </Button>
         </Grid>
 
         <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">

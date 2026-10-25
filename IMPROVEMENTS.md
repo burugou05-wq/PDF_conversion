@@ -67,3 +67,12 @@
 - 任意依存から `tkinterdnd2` を削除し、THIRD_PARTY_NOTICES.md とロックファイルも追随。
 - Windows CIのTk起動skip判定（ランナーのTcl欠損workaround）が消え、テストは 105 passed / 0 skipped で安定。
 - 変換エンジン（`image_processor.py` / `conversion_worker.py` / `ConversionWorker.spec`）とCLI（`cli.py` / `file_model.py`）は変更なし。
+
+## v2.3.0.0 での追加改善（アップデート確認）
+
+- `Services/UpdateChecker.cs`: GitHub Release API の最新版を取得し、タグを数値バージョンに変換して比較。下書き・プレリリース・数値でないタグは無視。結果は `update-cache.json` に保存し、自動確認は6時間に1回。通信できないときは前回の内容で判定する。
+- `Services/UpdateDownloader.cs`: EXEと `SHA256SUMS.txt` を `updates\<タグ>\` へ取得し、サイズ・SHA-256（sha256sum形式、`*` 表記対応）・MZ形式を検証。検証に失敗したファイルは削除。チェックサムが無いリリースは中止。古い版のダウンロードは次の更新時に掃除する。
+- `UpdateDialog.xaml(.cs)`: バージョン表示（ボタン）から開くダイアログ。リリースノートのMarkdownは見出し・本文・URLリンクに変換して表示。ダウンロード中の進捗とキャンセルに対応し、成功時は新しいEXEを起動してアプリを終了する。
+- `Services/UpdateSelfTest.cs` と `--selftest-update`: ネットワークなしで解析・比較・照合・ダイアログ生成を検証し、`build_winui.ps1` が単一EXEで実行する。
+- バージョン表示を、押せるボタン＋新しい版があるときだけ出る青い点に変更（`AutomationProperties.Name` も更新）。
+- 起動確認のCIでは `IMAGETOPDF_DISABLE_UPDATE_CHECK=1` を設定し、外部通信を行わない。

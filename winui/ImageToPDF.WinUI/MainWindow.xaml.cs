@@ -6,6 +6,7 @@ using ImageToPDF.WinUI.Services;
 using ImageToPDF.WinUI.ViewModels;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.ApplicationModel.DataTransfer;
@@ -40,6 +41,7 @@ public sealed partial class MainWindow : Window
 
     private readonly ConversionWorkerService _worker = new();
     private readonly List<ImageEntry> _thumbnailOrder = new();
+    private UpdateCheckResult? _updateCheck;
     private CancellationTokenSource? _conversionCancellation;
     private int _previewGeneration;
     private bool _settingsReady;
@@ -62,6 +64,70 @@ public sealed partial class MainWindow : Window
             AppLog.Info("アプリを終了しました");
         };
         _settingsReady = true;
+        // 起動時の更新確認は画面の表示を待たせません（結果だけバッジに反映します）。
+        _ = CheckForUpdatesAutomaticallyAsync();
+    }
+
+    /// <summary>
+    /// バージョン表示のタップで更新ダイアログを開きます。
+    /// ダイアログは開いたときに最新の状態を取り直すため、ここでは前回の結果を渡すだけです。
+    /// </summary>
+    private async void VersionButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new UpdateDialog(_updateCheck) { XamlRoot = Root.XamlRoot };
+        await dialog.ShowAsync();
+        // ダイアログ内で再確認した結果をバッジへ反映します。
+        ApplyUpdateIndicator(dialog.Result);
+    }
+
+    /// <summary>起動時に一度だけ最新リリースを確認します（6時間キャッシュ）。</summary>
+    private async Task CheckForUpdatesAutomaticallyAsync()
+    {
+        if (UpdateChecker.AutomaticCheckDisabled())
+        {
+            AppLog.Info("アップデートの自動確認は無効になっています");
+            return;
+        }
+
+        try
+        {
+            var result = await UpdateChecker.FindLatestAsync(
+                AppLog.NumericVersion, forceRefresh: false, CancellationToken.None);
+            if (_closing)
+            {
+                return;
+            }
+
+            ApplyUpdateIndicator(result);
+        }
+        catch (Exception error)
+        {
+            // 更新確認の失敗でアプリの動作を妨げません。
+            AppLog.Warning($"アップデートの自動確認に失敗しました: {error.GetType().Name}: {error.Message}");
+        }
+    }
+
+    /// <summary>新しい版があるときだけ青い点を出します。</summary>
+    private void ApplyUpdateIndicator(UpdateCheckResult? result)
+    {
+        _updateCheck = result;
+        if (result?.Release is { } release)
+        {
+            UpdateBadge.Visibility = Visibility.Visible;
+            ToolTipService.SetToolTip(
+                VersionButton, $"新しいバージョン v{release.TagName} があります。タップして更新できます");
+            AutomationProperties.SetName(
+                VersionButton, $"新しいバージョン v{release.TagName} があります。タップして更新できます");
+            AppLog.Info($"新しいバージョンがあります: v{release.TagName}（現在 v{AppLog.ApplicationVersion}）");
+            return;
+        }
+
+        UpdateBadge.Visibility = Visibility.Collapsed;
+        var tooltip = result is { Succeeded: false }
+            ? "バージョンを確認できませんでした。タップして再試行できます"
+            : "バージョン情報とアップデートを確認します";
+        ToolTipService.SetToolTip(VersionButton, tooltip);
+        AutomationProperties.SetName(VersionButton, tooltip);
     }
 
     private async void AddFilesButton_Click(object sender, RoutedEventArgs e)

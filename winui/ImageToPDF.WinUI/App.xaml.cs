@@ -20,6 +20,16 @@ public partial class App : Application
     {
         AppLog.Initialize();
         var commandLine = Environment.GetCommandLineArgs();
+        if (commandLine.Length == 3 && commandLine[1] == UpdateSelfTest.Flag)
+        {
+            // アップデート機能の自己診断（ネットワークには接続しません）。
+            AppLog.Info($"アップデート機能の自己診断を開始します: {commandLine[2]}");
+            var updateExitCode = UpdateSelfTest.Run(commandLine[2]);
+            AppLog.Info($"アップデート機能の自己診断を終了しました: exit={updateExitCode}");
+            Environment.Exit(updateExitCode);
+            return;
+        }
+
         if (commandLine.Length == 4 && commandLine[1] == SelfTest.ConvertFlag)
         {
             AppLog.Info($"自己診断を開始します: {commandLine[2]} → {commandLine[3]}");
