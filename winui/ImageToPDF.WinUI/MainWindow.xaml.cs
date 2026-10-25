@@ -99,6 +99,12 @@ public sealed partial class MainWindow : Window
             }
 
             ApplyUpdateIndicator(result);
+            // 更新直後の再起動ではインストーラー終了まで少し間があるため、数秒待ってから一時ファイルを掃除します。
+            await Task.Delay(TimeSpan.FromSeconds(3));
+            if (!_closing)
+            {
+                UpdateDownloader.CleanUpCompletedDownloads();
+            }
         }
         catch (Exception error)
         {

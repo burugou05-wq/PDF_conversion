@@ -11,23 +11,30 @@ public sealed record UpdateDownloadProgress(long Received, long Total)
 }
 
 /// <summary>
-/// 新しいEXEの取得と検証、起動までを受け持ちます。
+/// 新しいインストーラー（またはEXE）の取得と検証、起動までを受け持ちます。
 ///
-/// 更新は「管理者権限不要・自己完結の単一EXE」という配布方針を保つため、
-/// インストーラーを使わず次の順で行います。
-/// 1. 新しいEXEと <c>SHA256SUMS.txt</c> を <c>%LOCALAPPDATA%\ImageToPDF\updates\&lt;tag&gt;\</c> へ保存
+/// 更新は次の順で行います。
+/// 1. 新しいインストーラーと <c>SHA256SUMS.txt</c> を <c>%LOCALAPPDATA%\ImageToPDF\updates\&lt;tag&gt;\</c> へ保存
 /// 2. サイズとSHA-256を照合（一致しなければ削除して中止）
-/// 3. PE形式（MZ）を確認してから新しいEXEを起動し、このアプリを終了
+/// 3. PE形式（MZ）を確認してからサイレント更新引数つきでインストーラーを起動し、このアプリを終了
+/// 4. 更新後の再起動時に <c>updates\</c> 内のインストーラーを自動削除
 ///
-/// 現在のEXE自身は書き換えないため、実行中のロックや自己上書きの危険がありません。
 /// 失敗しても現在のアプリはそのまま使い続けられます。
 /// </summary>
 public static class UpdateDownloader
 {
+    public const string SilentInstallArguments =
+        "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /AUTOLAUNCH=1";
+
+    private const string InstallerPrefix = "ImageToPDF-Setup-";
     private const string ChecksumsAssetName = "SHA256SUMS.txt";
 
     /// <summary>このアプリの更新ファイルを置くフォルダー。</summary>
     public static string UpdatesDirectory => Path.Combine(AppLog.DataDirectory, "updates");
+
+    /// <summary>配布ファイルがインストーラー（ImageToPDF-Setup-*.exe）かどうかを判定します。</summary>
+    public static bool IsInstaller(string path) =>
+        Path.GetFileName(path).StartsWith(InstallerPrefix, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// 新しいEXEを取得して検証します。戻り値は検証済みEXEのフルパスです。
@@ -62,16 +69,24 @@ public static class UpdateDownloader
         return target;
     }
 
-    /// <summary>検証済みのEXEを新しい版として起動します。アプリはこの直後に終了します。</summary>
+    /// <summary>
+    /// 検証済みのインストーラー（またはEXE）を起動します。
+    /// インストーラーの場合はサイレント更新＋自動再起動の引数を渡します。
+    /// </summary>
     public static void Launch(string executablePath)
     {
+        var isInstaller = IsInstaller(executablePath);
         var startInfo = new ProcessStartInfo(executablePath)
         {
+            Arguments = isInstaller ? SilentInstallArguments : string.Empty,
             UseShellExecute = true,
             WorkingDirectory = Path.GetDirectoryName(executablePath) ?? AppContext.BaseDirectory,
         };
         Process.Start(startInfo);
-        AppLog.Info($"新しいバージョンを起動しました: {executablePath}");
+        AppLog.Info(
+            isInstaller
+                ? $"更新インストーラーを起動しました: {executablePath} {SilentInstallArguments}"
+                : $"新しいバージョンを起動しました: {executablePath}");
     }
 
     /// <summary>更新ファイルの保存先に使うディレクトリ名（タグ名を安全な文字だけにします）。</summary>
@@ -92,19 +107,34 @@ public static class UpdateDownloader
     /// <summary>古い版のダウンロードを残さないよう、今回の保存先以外を削除します。</summary>
     public static void CleanUpPreviousDownloads(string keepDirectory)
     {
+        CleanUpCompletedDownloads(runningDirectory: keepDirectory, updatesRoot: UpdatesDirectory);
+    }
+
+    /// <summary>
+    /// インストール先から起動しているとき、更新用の一時フォルダー（updates\）に残った
+    /// インストーラー等を削除します。updates\ 内から直接起動している場合だけ、そのフォルダーを残します。
+    /// </summary>
+    public static void CleanUpCompletedDownloads(
+        string? runningDirectory = null,
+        string? updatesRoot = null)
+    {
         try
         {
-            if (!Directory.Exists(UpdatesDirectory))
+            var root = Path.GetFullPath(updatesRoot ?? UpdatesDirectory);
+            if (!Directory.Exists(root))
             {
                 return;
             }
 
-            foreach (var directory in Directory.EnumerateDirectories(UpdatesDirectory))
+            var current = Path.GetFullPath(runningDirectory ?? AppContext.BaseDirectory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            foreach (var directory in Directory.EnumerateDirectories(root))
             {
-                if (string.Equals(
-                    Path.GetFullPath(directory),
-                    Path.GetFullPath(keepDirectory),
-                    StringComparison.OrdinalIgnoreCase))
+                var full = Path.GetFullPath(directory)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (string.Equals(current, full, StringComparison.OrdinalIgnoreCase)
+                    || current.StartsWith(
+                        full + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -114,7 +144,7 @@ public static class UpdateDownloader
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // 掃除はベストエフォートです（次回の更新時に再度試みます）。
+            // インストーラー終了直後でロックされている場合は次回起動時に削除します。
         }
     }
 

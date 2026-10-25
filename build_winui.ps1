@@ -46,6 +46,35 @@ function Assert-X64PeExecutable {
     Write-Host "Verified x64 PE executable: $ExecutablePath"
 }
 
+function Get-InnoSetupCompiler {
+    $Command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($null -ne $Command) { return $Command.Source }
+
+    foreach ($Candidate in @(
+        (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+        (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"),
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+    )) {
+        if ($Candidate -and (Test-Path -LiteralPath $Candidate -PathType Leaf)) {
+            return $Candidate
+        }
+    }
+
+    if ($env:GITHUB_ACTIONS -eq "true") {
+        & choco install innosetup --no-progress -y
+        foreach ($Candidate in @(
+            (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+            (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+        )) {
+            if ($Candidate -and (Test-Path -LiteralPath $Candidate -PathType Leaf)) {
+                return $Candidate
+            }
+        }
+    }
+
+    throw "Inno Setup 6 (ISCC.exe) was not found. Install Inno Setup 6 to build the installer."
+}
+
 function Test-WorkerConversion {
     param(
         [Parameter(Mandatory)][string]$WorkerExecutable,
@@ -390,7 +419,7 @@ try {
     Assert-X64PeExecutable -ExecutablePath $WorkerExecutable
     Test-WorkerConversion -WorkerExecutable $WorkerExecutable -Label "PyInstaller-output"
 
-    $ReleaseName = "ImageToPDF-v$Version-Windows-x64.exe"
+    $ReleaseName = "ImageToPDF-Setup-v$Version-Windows-x64.exe"
     $ReleaseExecutable = Join-Path $DistDirectory $ReleaseName
     $ChecksumPath = Join-Path $DistDirectory "SHA256SUMS.txt"
     foreach ($Stale in @($PublishDirectory, $ReleaseExecutable, $ChecksumPath)) {
@@ -440,33 +469,95 @@ try {
         throw "Single-file executable is unexpectedly small ($ExecutableSize bytes); the runtime or worker may be missing."
     }
 
-    Copy-Item -LiteralPath $PublishedExecutable -Destination $ReleaseExecutable -Force
-    # Redistribution notices ship next to the executable: the embedded Python
-    # worker bundles LGPL/GPL components documented in THIRD_PARTY_NOTICES.md.
+    # Inno Setup requires UTF-8 with BOM when the .iss file contains Japanese text.
+    $InstallerScript = Join-Path $RepoRoot "installer\ImageToPDF.iss"
+    $IssContent = [System.IO.File]::ReadAllText($InstallerScript, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($InstallerScript, $IssContent, [System.Text.UTF8Encoding]::new($true))
+
+    $IsccPath = Get-InnoSetupCompiler
+    & $IsccPath `
+        "/DAppVersion=$Version" `
+        "/DSourceExe=$PublishedExecutable" `
+        "/DOutputDir=$DistDirectory" `
+        $InstallerScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inno Setup installer build failed (exit code $LASTEXITCODE)."
+    }
+    if (-not (Test-Path -LiteralPath $ReleaseExecutable -PathType Leaf)) {
+        throw "Inno Setup did not produce the expected installer: $ReleaseExecutable"
+    }
+    $InstallerSize = (Get-Item -LiteralPath $ReleaseExecutable).Length
+    if ($InstallerSize -lt 20MB) {
+        throw "Installer executable is unexpectedly small ($InstallerSize bytes); the runtime or worker may be missing."
+    }
+
+    # Redistribution notices ship both inside the installer and next to it in Release assets.
     Copy-Item -LiteralPath (Join-Path $RepoRoot "LICENSE") -Destination $DistDirectory -Force
     Copy-Item -LiteralPath (Join-Path $RepoRoot "THIRD_PARTY_NOTICES.md") -Destination $DistDirectory -Force
     $Hash = (Get-FileHash -LiteralPath $ReleaseExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
     $ChecksumLine = "$Hash  $ReleaseName"
     Set-Content -Path $ChecksumPath -Value $ChecksumLine -Encoding ASCII
     if (([System.IO.File]::ReadAllText($ChecksumPath)).Trim() -ne $ChecksumLine) {
-        throw "Checksum file does not match the release executable."
+        throw "Checksum file does not match the release installer."
     }
 
-    # Run the release file alone, from a Unicode folder with no build output beside it.
+    # Run the installer into a Unicode folder and validate the installed ImageToPDF.exe.
     $VerificationDirectory = Join-Path $env:TEMP ("画像PDF確認-" + [Guid]::NewGuid().ToString("N"))
+    $InstalledDirectory = Join-Path $VerificationDirectory "インストール先"
     New-Item -ItemType Directory -Path $VerificationDirectory | Out-Null
+    $UninstallerExecutable = Join-Path $InstalledDirectory "unins000.exe"
     try {
-        $VerificationExecutable = Join-Path $VerificationDirectory $ReleaseName
-        Copy-Item -LiteralPath $ReleaseExecutable -Destination $VerificationExecutable
-        Test-SingleExeConversion -ExecutablePath $VerificationExecutable -WorkingDirectory $VerificationDirectory
-        Test-UpdateSelfCheck -ExecutablePath $VerificationExecutable -WorkingDirectory $VerificationDirectory
-        Test-WinUiStartup -ExecutablePath $VerificationExecutable -WorkingDirectory $VerificationDirectory
+        $VerificationInstaller = Join-Path $VerificationDirectory $ReleaseName
+        Copy-Item -LiteralPath $ReleaseExecutable -Destination $VerificationInstaller
+        $InstallProcess = Start-Process -FilePath $VerificationInstaller `
+            -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/TASKS=`"`"", "/DIR=`"$InstalledDirectory`"") `
+            -WorkingDirectory $VerificationDirectory -PassThru -WindowStyle Hidden
+        try {
+            if (-not $InstallProcess.WaitForExit(120000)) {
+                $InstallProcess.Kill($true)
+                throw "Installer smoke test timed out."
+            }
+            if ($InstallProcess.ExitCode -ne 0) {
+                throw "Installer smoke test failed (exit code $($InstallProcess.ExitCode))."
+            }
+        }
+        finally {
+            $InstallProcess.Dispose()
+        }
+
+        $InstalledExecutable = Join-Path $InstalledDirectory "ImageToPDF.exe"
+        Assert-X64PeExecutable -ExecutablePath $InstalledExecutable
+        if (-not (Test-Path -LiteralPath $UninstallerExecutable -PathType Leaf)) {
+            throw "Installer did not create the uninstaller: $UninstallerExecutable"
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $InstalledDirectory "LICENSE") -PathType Leaf)) {
+            throw "Installer did not copy LICENSE to the installation folder."
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $InstalledDirectory "THIRD_PARTY_NOTICES.md") -PathType Leaf)) {
+            throw "Installer did not copy THIRD_PARTY_NOTICES.md to the installation folder."
+        }
+
+        Test-SingleExeConversion -ExecutablePath $InstalledExecutable -WorkingDirectory $VerificationDirectory
+        Test-UpdateSelfCheck -ExecutablePath $InstalledExecutable -WorkingDirectory $VerificationDirectory
+        Test-WinUiStartup -ExecutablePath $InstalledExecutable -WorkingDirectory $VerificationDirectory
     }
     finally {
+        if (Test-Path -LiteralPath $UninstallerExecutable -PathType Leaf) {
+            $UninstallProcess = Start-Process -FilePath $UninstallerExecutable `
+                -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") `
+                -WorkingDirectory $VerificationDirectory -PassThru -WindowStyle Hidden
+            try {
+                [void]$UninstallProcess.WaitForExit(30000)
+            }
+            finally {
+                $UninstallProcess.Dispose()
+            }
+            Start-Sleep -Seconds 1
+        }
         Remove-Item $VerificationDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    Write-Host "WinUI single-file release fully validated: $ReleaseExecutable"
+    Write-Host "WinUI installer release fully validated: $ReleaseExecutable"
 }
 catch {
     $Details = ($_ | Out-String -Width 3000).Trim() -replace "[\r\n]+", " | "

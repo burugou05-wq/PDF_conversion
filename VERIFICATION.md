@@ -8,6 +8,13 @@
   - 変換エンジン（`image_processor.py`）とワーカー（`conversion_worker.py` / `ConversionWorker.spec`）の出力仕様は v2.1.1.0 から変更していません
   - `file_model.py` はCLIが利用するため残しています
 
+## v2.3.1.0 での追加（インストーラー化と上書き自動更新）
+
+- Inno Setup（`installer/ImageToPDF.iss`）でユーザー領域インストーラー `ImageToPDF-Setup-v<version>-Windows-x64.exe` を生成する（デスクトップショートカット作成のチェックボックス付き）
+- 自動更新時は `ImageToPDF-Setup-*.exe` を優先して選び、サイレント更新引数（`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /AUTOLAUNCH=1`）で起動する
+- インストール先から起動した際に `%LOCALAPPDATA%\ImageToPDF\updates\` 内の一時ファイルを自動削除する
+- `build_winui.ps1` で実際にインストーラーをサイレント実行し、展開された `ImageToPDF.exe` と `unins000.exe` に対して変換・更新自己診断・起動確認・アンインストール確認を行う
+
 ## v2.3.0.0 での追加（アップデート機能）
 
 - 起動時に最新リリースを確認し、新しい版があるときだけバージョン表示に青い点を出す
