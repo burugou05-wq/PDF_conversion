@@ -121,7 +121,7 @@
                 AutomationProperties.Name="バージョン情報とアップデートを確認します">
                 <Grid>
                     <TextBlock
-                        Text="v2.3.0.0"
+                        Text="v2.3.0.1"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <Ellipse
                         x:Name="UpdateBadge"
