@@ -65,6 +65,12 @@ public static class AppLog
         }
     }
 
+    /// <summary>アプリのデータフォルダー（<c>%LOCALAPPDATA%\ImageToPDF</c>）。</summary>
+    public static string DataDirectory { get; } = ResolveDataDirectory();
+
+    /// <summary>バージョンの数値表現（比較用）。読めなかったときは 0.0.0.0。</summary>
+    public static Version NumericVersion { get; } = ResolveNumericVersion();
+
     /// <summary>保存先を解決します。何度呼んでも安全です。</summary>
     public static void Initialize()
     {
@@ -140,6 +146,18 @@ public static class AppLog
     {
         try
         {
+            return Path.Combine(DataDirectory, "app.log");
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string ResolveDataDirectory()
+    {
+        try
+        {
             var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             if (string.IsNullOrWhiteSpace(localAppData))
             {
@@ -149,12 +167,20 @@ public static class AppLog
                     "Local");
             }
 
-            return Path.Combine(localAppData, "ImageToPDF", "app.log");
+            return Path.Combine(localAppData, "ImageToPDF");
         }
         catch (Exception)
         {
-            return null;
+            // データフォルダーを解決できない環境では、EXEのとなりを使います。
+            return AppContext.BaseDirectory;
         }
+    }
+
+    private static Version ResolveNumericVersion()
+    {
+        // InformationalVersion にはビルド由来の "+<hash>" が付くことがあります。
+        var text = ApplicationVersion.Split('+')[0];
+        return Version.TryParse(text, out var version) ? version : new Version(0, 0, 0, 0);
     }
 
     private static string Format(string level, string message, Exception? error)

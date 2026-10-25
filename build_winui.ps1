@@ -205,6 +205,51 @@ function Test-SingleExeConversion {
     Write-Host "Application log verified: $AppLog ($AppLogLength bytes, rotated to $AppLog.1)"
 }
 
+function Test-UpdateSelfCheck {
+    param(
+        [Parameter(Mandatory)][string]$ExecutablePath,
+        [Parameter(Mandatory)][string]$WorkingDirectory
+    )
+
+    # リリース応答の解析・バージョン比較・SHA-256照合・更新ダイアログの生成を
+    # ネットワークなしで確認します（GitHub APIの応答を模した固定のJSONを使用）。
+    $LogPath = Join-Path $WorkingDirectory "アップデート自己診断.txt"
+    if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
+    $Process = $null
+    $env:IMAGETOPDF_DISABLE_UPDATE_CHECK = "1"
+    try {
+        $Process = Start-Process -FilePath $ExecutablePath `
+            -ArgumentList @("--selftest-update", "`"$LogPath`"") `
+            -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
+        if (-not $Process.WaitForExit(90000)) {
+            $Process.Kill($true)
+            throw "Update self-check timed out."
+        }
+        if ($Process.ExitCode -ne 0) {
+            $Details = if (Test-Path -LiteralPath $LogPath) {
+                [System.IO.File]::ReadAllText($LogPath)
+            } else {
+                "no diagnostics were written"
+            }
+            throw "Update self-check failed (exit code $($Process.ExitCode)).`n$Details"
+        }
+    }
+    finally {
+        Remove-Item Env:\IMAGETOPDF_DISABLE_UPDATE_CHECK -ErrorAction SilentlyContinue
+        if ($null -ne $Process) { $Process.Dispose() }
+    }
+
+    if (-not (Test-Path -LiteralPath $LogPath)) {
+        throw "Update self-check did not write its log: $LogPath"
+    }
+    $Log = [System.IO.File]::ReadAllText($LogPath)
+    if ($Log -notlike "*update selftest ok*") {
+        throw "Update self-check reported a failure: $Log"
+    }
+
+    Write-Host "Update self-check passed: $LogPath"
+}
+
 function Get-WinUiCrashContext {
     param(
         [Parameter(Mandatory)][string]$ExecutablePath,
@@ -248,6 +293,8 @@ function Test-WinUiStartup {
     $AppLog = Join-Path $WorkingDirectory "起動ログ.txt"
     if (Test-Path -LiteralPath $AppLog) { Remove-Item -LiteralPath $AppLog -Force }
     $env:IMAGETOPDF_APP_LOG = $AppLog
+    # 起動確認では外部通信（更新確認）を行いません。
+    $env:IMAGETOPDF_DISABLE_UPDATE_CHECK = "1"
     $Process = $null
     $StartupStartedAt = Get-Date
     try {
@@ -292,6 +339,7 @@ function Test-WinUiStartup {
     }
     finally {
         Remove-Item Env:\IMAGETOPDF_APP_LOG -ErrorAction SilentlyContinue
+        Remove-Item Env:\IMAGETOPDF_DISABLE_UPDATE_CHECK -ErrorAction SilentlyContinue
         if ($null -ne $Process) {
             try {
                 $Process.Refresh()
@@ -411,6 +459,7 @@ try {
         $VerificationExecutable = Join-Path $VerificationDirectory $ReleaseName
         Copy-Item -LiteralPath $ReleaseExecutable -Destination $VerificationExecutable
         Test-SingleExeConversion -ExecutablePath $VerificationExecutable -WorkingDirectory $VerificationDirectory
+        Test-UpdateSelfCheck -ExecutablePath $VerificationExecutable -WorkingDirectory $VerificationDirectory
         Test-WinUiStartup -ExecutablePath $VerificationExecutable -WorkingDirectory $VerificationDirectory
     }
     finally {
