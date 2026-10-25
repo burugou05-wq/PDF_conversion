@@ -57,7 +57,7 @@ jobs:
         with:
           name: ImageToPDF-WinUI-Release
           path: |
-            dist/ImageToPDF-v*-Windows-x64.exe
+            dist/ImageToPDF-Setup-v*-Windows-x64.exe
             dist/SHA256SUMS.txt
             dist/LICENSE
             dist/THIRD_PARTY_NOTICES.md

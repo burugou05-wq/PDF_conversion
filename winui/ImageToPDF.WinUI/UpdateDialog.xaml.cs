@@ -148,8 +148,7 @@ public sealed partial class UpdateDialog : ContentDialog
                 + " MB";
         }
 
-        yield return "取得したファイルはSHA-256を照合してから起動します。"
-            + "現在のバージョンのファイルは置き換えません。";
+        yield return "インストーラーを取得し、SHA-256を照合してから自動で更新・再起動します。";
     }
 
     /// <summary>リリースノート（Markdown）を、見出しと本文の段落に分けて表示します。</summary>
@@ -282,12 +281,12 @@ public sealed partial class UpdateDialog : ContentDialog
             }
 
             DownloadProgress.Value = 100;
-            StatusText.Text = "検証が完了しました。新しいバージョンを起動します…";
+            StatusText.Text = "検証が完了しました。更新して再起動します…";
             AppLog.Info($"アップデートを適用します: {release.TagName}");
 
             UpdateDownloader.Launch(path);
-            // 新しいプロセスが立ち上がってから、このアプリを終了します。
-            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            // インストーラーが立ち上がってから、上書きできるようこのアプリを終了します。
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
             Application.Current.Exit();
         }
         catch (OperationCanceledException)

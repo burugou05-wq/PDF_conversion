@@ -1,17 +1,18 @@
-# 画像 → PDF 変換ツール v2.3.0.1
+# 画像 → PDF 変換ツール v2.3.1.0
 
 Windows 11向けのネイティブ画面（WinUI 3）で、画像を並べてPDFにまとめるツールです。画像の追加・フォルダー追加、順番変更、検索、リスト／グリッド表示、プレビューと画像情報（寸法・DPI・ICC）、ドラッグ＆ドロップに対応します。新しいバージョンは起動時に確認し、画面から更新できます。CLIからも同じ変換エンジンを利用できます。
 
 今回の変更内容は [更新履歴（一般ユーザー向け）](CHANGELOG.md) をご覧ください。
 
-## EXEのダウンロード（一般ユーザー向け）
+## インストーラーのダウンロード（一般ユーザー向け）
 
-[最新のGitHub Release](https://github.com/burugou05-wq/PDF_conversion/releases/latest) の「Assets」から、`ImageToPDF-v<version>-Windows-x64.exe` を1つだけダウンロードして実行してください。ZIPの展開や、Pythonのインストールは不要です。
+[最新のGitHub Release](https://github.com/burugou05-wq/PDF_conversion/releases/latest) の「Assets」から、`ImageToPDF-Setup-v<version>-Windows-x64.exe` をダウンロードして実行してください。ZIPの展開や、Pythonのインストール、管理者権限は不要です。
 
-- 初回起動時、EXE内の変換エンジンを `%LOCALAPPDATA%\ImageToPDF\worker` に展開します。
-- 正式版はWinUI 3版です。Tkinter版は v2.1.0 で配布を終了し、v2.2.0.0 でソースコードを削除してWinUI 3版に一本化しました。
-- 正式配布EXEにコード署名はありません。警告が出た場合は入手元を確認し、セキュリティソフトが危険と判定したファイルは実行しないでください。
-- 同じ Release の `SHA256SUMS.txt` で、ダウンロードしたEXEのSHA-256を確認できます。
+- ユーザー領域（既定では `%LOCALAPPDATA%\Programs\ImageToPDF\ImageToPDF.exe`）にインストールされ、スタートメニューにショートカットを作成します。インストール画面の**「デスクトップ上にアイコンを作成する」チェックボックス**でデスクトップショートカットの有無を選べます。
+- 初回起動時、アプリ内の変換エンジンを `%LOCALAPPDATA%\ImageToPDF\worker` に展開します。
+- Windowsの「設定 ＞ アプリ ＞ インストールされているアプリ」からアンインストールでき、展開された変換ワーカーやキャッシュ（`%LOCALAPPDATA%\ImageToPDF`）もまとめて削除されます。
+- 正式配布物にコード署名はありません。警告が出た場合は入手元を確認し、セキュリティソフトが危険と判定したファイルは実行しないでください。
+- 同じ Release の `SHA256SUMS.txt` で、ダウンロードしたインストーラーのSHA-256を確認できます。
 - 新しいバージョンは起動時に確認します（[アップデート](#アップデート)）。右上のバージョン表示をタップすると、更新内容と「更新する」ボタンが開きます。
 
 検証状況と制限は [更新履歴](CHANGELOG.md) をご確認ください。
@@ -98,18 +99,18 @@ AVIF対応はPillowの機能または追加プラグイン、HEIF/HEIC対応は�
 - 新しい版のタグ・公開日・ダウンロードサイズ・更新内容（CHANGELOGの該当セクション）
 - 「更新する」ボタン（最新のときは「リリースページを開く」のみ）
 
-「更新する」を押すと、新しいEXEと `SHA256SUMS.txt` を `%LOCALAPPDATA%\ImageToPDF\updates\<タグ>\` へダウンロードし、サイズ・SHA-256・実行ファイル形式を確認してから起動します。確認に失敗したファイルは削除して中止し、今のアプリはそのまま使えます。
+「更新する」を押すと、新しいインストーラーと `SHA256SUMS.txt` を `%LOCALAPPDATA%\ImageToPDF\updates\<タグ>\` へダウンロードし、サイズ・SHA-256・実行ファイル形式を確認してからサイレント更新（上書きインストール＋自動再起動）を行います。確認に失敗したファイルは削除して中止し、今のアプリはそのまま使えます。
 
-- 現在のEXEは置き換えません（管理者権限も不要）。元のEXEは残ります。
-- インストーラーは使いません。コード署名がないため、初回起動時の警告は従来どおりです。
+- インストール先の `ImageToPDF.exe` を同じ場所で上書きするため、古いEXEが残らず、デスクトップやスタートメニューのショートカットもそのまま使えます（管理者権限も不要です）。
+- 更新完了後の再起動時に、`%LOCALAPPDATA%\ImageToPDF\updates\` 内のインストーラーは自動で削除されます。
 - チェックサムが公開されていないリリースは、安全のため更新を中止します。
 - 通信先は `api.github.com`（リリース情報）と `github.com`（配布ファイル）だけです。送信するのはUser-Agentなどの標準ヘッダーだけで、利用状況は送りません。
 - 自動確認を止めたいときは、環境変数 `IMAGETOPDF_DISABLE_UPDATE_CHECK` に値を設定して起動します。バージョン表示から手動で確認することはできます。
-- この機能は v2.3.0.0 以降で動作します。それ以前の版から移る場合は、Releaseから手動で取得してください。
+- この機能は v2.3.0.0 以降で動作します。v2.3.0.0 / v2.3.0.1（単体EXE版）から更新した場合はインストーラー画面が開き、以後はインストール先（`%LOCALAPPDATA%\Programs\ImageToPDF\ImageToPDF.exe`）で上書き更新されます。
 
-## EXEビルド（正式版: WinUI 3・単一EXE）
+## インストーラーのビルド（正式版: WinUI 3 + Inno Setup）
 
-Windows 11 / 10 x64 で、PowerShellから次を実行します。Python 3.10〜3.12、.NET 8 SDK、Visual Studio 2022 のMSBuildが必要です。
+Windows 11 / 10 x64 で、PowerShellから次を実行します。Python 3.10〜3.12、.NET 8 SDK、Visual Studio 2022 のMSBuild、Inno Setup 6 が必要です。
 
 ```powershell
 .\build_winui.ps1
@@ -117,8 +118,8 @@ Windows 11 / 10 x64 で、PowerShellから次を実行します。Python 3.10〜
 
 テスト・コードチェック後、次を作成して検証します。
 
-- `dist\ImageToPDF-v<version>-Windows-x64.exe`: 配布用の単一EXE（Releaseに添付するファイル）
-- `dist\SHA256SUMS.txt`: 上記EXEのSHA-256
+- `dist\ImageToPDF-Setup-v<version>-Windows-x64.exe`: 配布用のインストーラー（Releaseに添付するファイル）
+- `dist\SHA256SUMS.txt`: 上記インストーラーのSHA-256
 
 スクリプトはPyInstallerで変換ワーカー（`ImageToPDFWorker.exe`）を作り、WinUI版EXEの中に埋め込みます。公開されたEXEを一時フォルダーへ単独でコピーし、次を確認します。
 

@@ -46,8 +46,8 @@ PowerShellで次を実行します。
 2. PyInstallerで `dist\ImageToPDFWorker.exe` を作成し、変換を試します。
 3. MSBuildでWinUI版を `PublishSingleFile` の self-contained として発行します。ワーカーはEXE内に埋め込まれます。
 4. 発行されたファイルがEXE1つだけであることを確認します。
-5. `dist\ImageToPDF-v<version>-Windows-x64.exe` と `dist\SHA256SUMS.txt` を作成します。
-6. そのEXEを単独で一時フォルダーにコピーし、埋め込みワーカーによる日本語パスのPDF変換、`app.log` への記録と1MBローテーション、アップデート機能の自己診断（`--selftest-update`）、ウィンドウの起動と起動ログの記録を確認します（ログは `IMAGETOPDF_APP_LOG` で一時ファイルへ向けるため、実行機のログは汚しません）。
+5. Inno Setup（`installer\ImageToPDF.iss`）で `dist\ImageToPDF-Setup-v<version>-Windows-x64.exe` と `dist\SHA256SUMS.txt` を作成します。
+6. そのインストーラーを一時フォルダーへサイレント実行し、インストールされた `ImageToPDF.exe` で埋め込みワーカーによる日本語パスのPDF変換、`app.log` への記録と1MBローテーション、アップデート機能の自己診断（`--selftest-update`）、ウィンドウの起動と起動ログの記録、最後にアンインストーラー（`unins000.exe`）の実行を確認します（ログは `IMAGETOPDF_APP_LOG` で一時ファイルへ向けるため、実行機のログは汚しません）。
 
 ビルドにはWindowsと Windows App SDK の復元が必要です。CIは `windows-latest` で同じスクリプトを実行します。
 

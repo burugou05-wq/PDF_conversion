@@ -70,7 +70,11 @@ public static class UpdateSelfTest
         var newer = UpdateChecker.ParseLatestRelease(
             ReleaseJson("v9.9.9.0", prerelease: false, draft: false), current);
         Check("新しい版を検出する", () => newer is not null && newer.Version.ToString() == "9.9.9.0");
-        Check("EXEのアセットを選ぶ", () => newer?.AssetName == "ImageToPDF-v9.9.9.0-Windows-x64.exe");
+        Check("インストーラーのアセットを選ぶ", () => newer?.AssetName == "ImageToPDF-Setup-v9.9.9.0-Windows-x64.exe");
+        Check(
+            "インストーラー判定ができる",
+            () => UpdateDownloader.IsInstaller("ImageToPDF-Setup-v9.9.9.0-Windows-x64.exe")
+                && !UpdateDownloader.IsInstaller("ImageToPDF-v9.9.9.0-Windows-x64.exe"));
         Check(
             "チェックサムのアセットを選ぶ",
             () => newer?.ChecksumsUrl?.EndsWith("SHA256SUMS.txt", StringComparison.Ordinal) == true);
@@ -170,6 +174,22 @@ public static class UpdateSelfTest
 
             CheckThrows("MZでないファイルは中止する",
                 () => UpdateDownloader.Verify(notExecutable, "not-an-exe.exe", $"{notExecutableHash}  not-an-exe.exe\n"));
+
+            var updatesRoot = Path.Combine(directory, "updates");
+            var oldTagDir = Path.Combine(updatesRoot, "v2.3.0.1");
+            var newTagDir = Path.Combine(updatesRoot, "v2.3.1.0");
+            Directory.CreateDirectory(oldTagDir);
+            Directory.CreateDirectory(newTagDir);
+            File.WriteAllText(Path.Combine(oldTagDir, "dummy.exe"), "x");
+            File.WriteAllText(Path.Combine(newTagDir, "dummy.exe"), "x");
+            UpdateDownloader.CleanUpCompletedDownloads(runningDirectory: newTagDir, updatesRoot: updatesRoot);
+            Check("updates内から起動中は自分のフォルダーを残す",
+                () => !Directory.Exists(oldTagDir) && Directory.Exists(newTagDir));
+            var installedDir = Path.Combine(directory, "Programs", "ImageToPDF");
+            Directory.CreateDirectory(installedDir);
+            UpdateDownloader.CleanUpCompletedDownloads(runningDirectory: installedDir, updatesRoot: updatesRoot);
+            Check("インストール先から起動したらupdates内をすべて掃除する",
+                () => !Directory.Exists(newTagDir));
         }
         finally
         {
@@ -238,9 +258,9 @@ public static class UpdateSelfTest
           "body": "テスト用のリリースノートです。\r\n\r\n### 変更点\r\n\r\n- 箇条書きの1行目\r\n- 箇条書きの2行目 https://github.com/burugou05-wq/PDF_conversion\r\n",
           "assets": [
             {
-              "name": "ImageToPDF-{{tag}}-Windows-x64.exe",
+              "name": "ImageToPDF-Setup-{{tag}}-Windows-x64.exe",
               "size": 123456789,
-              "browser_download_url": "https://github.com/burugou05-wq/PDF_conversion/releases/download/{{tag}}/ImageToPDF-{{tag}}-Windows-x64.exe"
+              "browser_download_url": "https://github.com/burugou05-wq/PDF_conversion/releases/download/{{tag}}/ImageToPDF-Setup-{{tag}}-Windows-x64.exe"
             },
             {
               "name": "SHA256SUMS.txt",

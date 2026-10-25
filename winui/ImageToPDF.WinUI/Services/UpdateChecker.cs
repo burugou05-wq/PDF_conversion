@@ -51,6 +51,7 @@ public static class UpdateChecker
 
     private const string ChecksumsAssetName = "SHA256SUMS.txt";
     private const string ExecutableSuffix = ".exe";
+    private const string InstallerPrefix = "ImageToPDF-Setup-";
     private const string ExecutablePrefix = "ImageToPDF-";
 
     private static readonly TimeSpan AutomaticCheckInterval = TimeSpan.FromHours(6);
@@ -186,6 +187,7 @@ public static class UpdateChecker
         string? downloadUrl = null;
         string? checksumsUrl = null;
         long downloadSize = 0;
+        var hasInstallerAsset = false;
         if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
         {
             foreach (var asset in assets.EnumerateArray())
@@ -197,9 +199,18 @@ public static class UpdateChecker
                     continue;
                 }
 
-                if (downloadUrl is null
-                    && name.EndsWith(ExecutableSuffix, StringComparison.OrdinalIgnoreCase)
-                    && name.StartsWith(ExecutablePrefix, StringComparison.OrdinalIgnoreCase))
+                var isInstaller = name.EndsWith(ExecutableSuffix, StringComparison.OrdinalIgnoreCase)
+                    && name.StartsWith(InstallerPrefix, StringComparison.OrdinalIgnoreCase);
+                var isExecutable = name.EndsWith(ExecutableSuffix, StringComparison.OrdinalIgnoreCase)
+                    && name.StartsWith(ExecutablePrefix, StringComparison.OrdinalIgnoreCase);
+                if (isInstaller && !hasInstallerAsset)
+                {
+                    assetName = name;
+                    downloadUrl = url;
+                    downloadSize = GetInt64(asset, "size");
+                    hasInstallerAsset = true;
+                }
+                else if (isExecutable && downloadUrl is null)
                 {
                     assetName = name;
                     downloadUrl = url;
