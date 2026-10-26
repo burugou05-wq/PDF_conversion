@@ -1,0 +1,16 @@
+# Temporary bootstrap: referencing an environment from a workflow run makes
+# GitHub create it. Removed once the release environment and its secret exist.
+name: Initialize release environment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - run: echo "Initialized the release environment."
