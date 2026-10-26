@@ -24,7 +24,7 @@ internal static class ReleaseSignature
     /// すべての自動更新を拒否します（フェイルクローズ）。
     /// </summary>
     internal const string SubjectPublicKeyInfoBase64 =
-        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEe7MyOwwr+3BTiglPceTbznQefCD8zv/8ayUqU6BdOSJ4AVDoEMtRQPRHiwzWAGzxDxqfFHFftBapxw4RaAQBeA==";
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE78+Rf0CrX9M2CgoOvJAfqinj8cXRtg43+j1WYdhhZPEH6p9bTaqSp4zkFZuUlqyOXGrdjEPDoaQWkOQnBkIyxA==";
 
     internal static bool IsConfigured => SubjectPublicKeyInfoBase64.Length > 0;
 
