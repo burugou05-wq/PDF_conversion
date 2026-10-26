@@ -1,5 +1,5 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "2.3.1.0"
+  #define AppVersion "2.3.1.1"
 #endif
 #ifndef SourceExe
   #define SourceExe "..\build_tmp\winui-publish\ImageToPDF.WinUI.exe"
