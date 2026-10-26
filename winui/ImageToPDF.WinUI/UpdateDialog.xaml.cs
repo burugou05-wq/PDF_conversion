@@ -26,6 +26,7 @@ public sealed partial class UpdateDialog : ContentDialog
     private CancellationTokenSource? _download;
     private UpdateCheckResult? _check;
     private bool _busy;
+    private bool _canAutoUpdate;
 
     public UpdateDialog(UpdateCheckResult? initial)
     {
@@ -85,17 +86,27 @@ public sealed partial class UpdateDialog : ContentDialog
 
         if (check?.Release is { DownloadUrl: not null } release)
         {
+            // 署名付きチェックサムが揃わないリリースは自動更新できません。
+            _canAutoUpdate = release.ChecksumsUrl is not null && release.SignatureUrl is not null;
             VersionSummaryText.Text = $"新しいバージョン v{release.TagName} があります";
             ReleaseInfoText.Text = string.Join(Environment.NewLine, DescribeRelease(release));
             NotesExpander.Visibility = Visibility.Visible;
             NotesExpander.IsExpanded = true;
             NotesExpander.Header = $"更新内容（{release.TagName}）";
             BuildNotes(release.Notes);
-            OpenReleasesButton.Visibility = Visibility.Collapsed;
-            PrimaryButtonText = "更新する";
+            OpenReleasesButton.Visibility = _canAutoUpdate ? Visibility.Collapsed : Visibility.Visible;
+            PrimaryButtonText = _canAutoUpdate ? "更新する" : string.Empty;
             DownloadProgress.Visibility = Visibility.Collapsed;
+            if (!_canAutoUpdate)
+            {
+                StatusText.Text = "このリリースには署名付きチェックサムがないため自動更新できません。"
+                    + "下のボタンからリリースページを開き、手動で更新してください。";
+            }
+
             return;
         }
+
+        _canAutoUpdate = false;
 
         VersionSummaryText.Text = check is { Succeeded: true }
             ? "最新のバージョンを使用しています"
@@ -148,7 +159,7 @@ public sealed partial class UpdateDialog : ContentDialog
                 + " MB";
         }
 
-        yield return "インストーラーを取得し、SHA-256を照合してから自動で更新・再起動します。";
+        yield return "インストーラーと署名付きチェックサムを取得し、署名を検証してから自動で更新・再起動します。";
     }
 
     /// <summary>リリースノート（Markdown）を、見出しと本文の段落に分けて表示します。</summary>
@@ -250,7 +261,7 @@ public sealed partial class UpdateDialog : ContentDialog
             return;
         }
 
-        if (_check?.Release is not { } release)
+        if (!_canAutoUpdate || _check?.Release is not { } release)
         {
             return;
         }
@@ -315,7 +326,7 @@ public sealed partial class UpdateDialog : ContentDialog
     private void SetBusy(bool isBusy)
     {
         _busy = isBusy;
-        PrimaryButtonText = isBusy ? "キャンセル" : "更新する";
+        PrimaryButtonText = isBusy ? "キャンセル" : (_canAutoUpdate ? "更新する" : string.Empty);
         CloseButtonText = isBusy ? string.Empty : "閉じる";
         IsPrimaryButtonEnabled = true;
         DownloadProgress.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;

@@ -20,6 +20,7 @@
 - 起動時に最新リリースを確認し、新しい版があるときだけバージョン表示に青い点を出す
 - バージョン表示のタップで、現在のバージョン・確認時刻・リリースノート・更新ボタンを表示する
 - 「更新する」で取得したファイルのサイズ・SHA-256・MZ形式を検証し、失敗したら削除して中止する
+- 次期版では `SHA256SUMS.txt.sig` の署名（ECDSA P-256）と `# tag:` 行、配布 URL のホスト・パスも検証する（[RELEASING.md](RELEASING.md)）
 - 通信できないときは理由を表示し、前回の情報があればそれで判定する
 
 CIでは `--selftest-update` により、解析・バージョン比較・SHA-256照合・ダイアログ生成までをネットワークなしで確認します。実際の通信・ダウンロード・起動の置き換えはCIでは行いません（実機での確認項目です）。
@@ -54,7 +55,9 @@ CIはコンパイルと起動、パッケージEXEの変換までしか確認で
 - **同じ実行で app.log に変換の記録が残り、1MBを超えて `app.log.1` へ繰り下げられることを確認**（`IMAGETOPDF_APP_LOG` で一時ファイルへ向けるため、実行機のログは汚しません）
 - `--selftest-update` で、リリース応答の解析・バージョン比較・SHA-256照合・更新ダイアログの生成を確認（ネットワークなし）
 - 同じEXEからウィンドウを表示し、タイトル「画像PDF変換ツール」と、**app.log への起動記録**を確認
-- `SHA256SUMS.txt` とEXEのSHA-256の一致
+- `SHA256SUMS.txt` とEXEのSHA-256の一致、`# tag:` 行の一致
+- `SHA256SUMS.txt.sig` の署名が埋め込み公開鍵で検証できること（`python scripts/release_signing.py verify`）
+- `--selftest-update` で署名検証・URL検証を含む全項目が通ること
 - `LICENSE` / `THIRD_PARTY_NOTICES.md` の同梱
 
 ## エンジンの動作確認（v2.1.0.1 で実施済み・変更なし）
@@ -70,7 +73,7 @@ CIはコンパイルと起動、パッケージEXEの変換までしか確認で
 ## リリース手順
 
 - `app_config.py` の `VERSION`、`MainWindow.xaml` のバージョン表示、`ImageToPDF.WinUI.csproj` の `Version`、CHANGELOGの `## v2.2.0.0 ` 見出しを一致させます（`build_winui.ps1` が app_config と XAML の整合をチェックし、不一致だとCIが落ちます）。
-- CIが緑になったことを確認してからタグ `v2.2.0.0` をプッシュします（緑の前にタグを打たないこと）。CIがビルドしたEXEとNOTICESでGitHub Releaseを作成します（リリースノートはCHANGELOGの該当セクションから生成）。
+- CIが緑になったことを確認してからタグ `v<バージョン>` をプッシュします（緑の前にタグを打たないこと）。`release` environment の承認後、CIがビルドしたインストーラーと署名付きチェックサムでGitHub Releaseを作成します（リリースノートはCHANGELOGの該当セクションから生成）。手順は [RELEASING.md](RELEASING.md)。
 - リリースノートは `awk 'index($0, "## v<バージョン> ") == 1'` でCHANGELOGから抽出されます。見出しは必ず `## v<バージョン> ` + 半角スペース + タイトルの形にしてください。
-- publish-releaseジョブの成功と、Release資産4点（`ImageToPDF-v<バージョン>-Windows-x64.exe` / `SHA256SUMS.txt` / `LICENSE` / `THIRD_PARTY_NOTICES.md`）を確認します。
+- publish-releaseジョブの成功と、Release資産5点（`ImageToPDF-Setup-v<バージョン>-Windows-x64.exe` / `SHA256SUMS.txt` / `SHA256SUMS.txt.sig` / `LICENSE` / `THIRD_PARTY_NOTICES.md`）を確認します。既存 Release の上書きは行いません。
 - 依存ライブラリのバージョンを上げたときは、`THIRD_PARTY_NOTICES.md` の表も合わせて更新します（NOTICESはRelease資産として配布物に同梱されるため）。

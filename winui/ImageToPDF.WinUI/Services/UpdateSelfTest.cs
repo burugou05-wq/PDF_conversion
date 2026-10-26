@@ -1,14 +1,15 @@
-using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace ImageToPDF.WinUI.Services;
 
 /// <summary>
 /// アップデート機能の自己診断（<c>--selftest-update &lt;ログ&gt;</c>）です。
 ///
-/// ネットワークには接続せず、リリース応答の解析・バージョン比較・SHA-256照合・
-/// 更新ダイアログの生成だけを確認します。ビルド検証（build_winui.ps1）から呼ばれます。
+/// ネットワークには接続せず、リリース応答の解析・バージョン比較・URL検証・
+/// チェックサム署名（その場で生成した一時鍵）・更新ダイアログの生成だけを確認します。
+/// ビルド検証（build_winui.ps1）から呼ばれます。
 /// </summary>
 public static class UpdateSelfTest
 {
@@ -78,6 +79,9 @@ public static class UpdateSelfTest
         Check(
             "チェックサムのアセットを選ぶ",
             () => newer?.ChecksumsUrl?.EndsWith("SHA256SUMS.txt", StringComparison.Ordinal) == true);
+        Check(
+            "署名のアセットを選ぶ",
+            () => newer?.SignatureUrl?.EndsWith("SHA256SUMS.txt.sig", StringComparison.Ordinal) == true);
         Check("リリースノートを読む", () => newer?.Notes.Contains("テスト用のリリースノート", StringComparison.Ordinal) == true);
         Check("公開日を読む", () => newer?.PublishedAt is not null);
         Check("配布サイズを読む", () => newer?.DownloadSize == 123456789);
@@ -98,6 +102,53 @@ public static class UpdateSelfTest
             "タグが数値でなければ無視する",
             () => UpdateChecker.ParseLatestRelease(
                 ReleaseJson("latest", prerelease: false, draft: false), current) is null);
+        Check(
+            "パスを含むタグは無視する",
+            () => UpdateChecker.ParseLatestRelease(
+                ReleaseJson("v9.9.9.0/../../evil", prerelease: false, draft: false), current) is null);
+        Check(
+            "単体EXEだけのリリースは対象にしない",
+            () => UpdateChecker.ParseLatestRelease(
+                ReleaseJson("v9.9.9.0", prerelease: false, draft: false, includeInstaller: false), current)
+                ?.AssetName is null);
+        Check(
+            "署名のないリリースは署名URLがnull",
+            () => UpdateChecker.ParseLatestRelease(
+                ReleaseJson("v9.9.9.0", prerelease: false, draft: false, includeSignature: false), current)
+                ?.SignatureUrl is null);
+        Check(
+            "別ホストの配布URLは無視する",
+            () => UpdateChecker.ParseLatestRelease(
+                ReleaseJson("v9.9.9.0", prerelease: false, draft: false, host: "evil.example.com"), current)
+                ?.AssetName is null);
+
+        // --- URL とタグ名の検証 --------------------------------------------------
+        Check("配布URLのホストを制限する", () =>
+            UpdateHttp.IsAllowedAssetUrl("https://github.com/a/b/releases/download/v1.0.0.0/x.exe")
+            && !UpdateHttp.IsAllowedAssetUrl("http://github.com/a/b/releases/download/v1.0.0.0/x.exe")
+            && !UpdateHttp.IsAllowedAssetUrl("https://evil.example.com/x.exe")
+            && !UpdateHttp.IsAllowedAssetUrl("https://github.com.evil.example.com/x.exe")
+            && !UpdateHttp.IsAllowedAssetUrl("not a url"));
+        Check("配布URLのパスを検証する", () =>
+            UpdateChecker.IsTrustedAssetUrl(
+                "https://github.com/burugou05-wq/PDF_conversion/releases/download/v9.9.9.0/SHA256SUMS.txt",
+                "v9.9.9.0", "SHA256SUMS.txt")
+            && !UpdateChecker.IsTrustedAssetUrl(
+                "https://github.com/attacker/PDF_conversion/releases/download/v9.9.9.0/SHA256SUMS.txt",
+                "v9.9.9.0", "SHA256SUMS.txt")
+            && !UpdateChecker.IsTrustedAssetUrl(
+                "https://github.com/burugou05-wq/PDF_conversion/releases/download/v9.9.9.0/SHA256SUMS.txt",
+                "v9.9.9.0", "ImageToPDF-Setup-v9.9.9.0-Windows-x64.exe"));
+        Check("リリースページのURLを検証する", () =>
+            UpdateChecker.IsTrustedReleasePageUrl(
+                "https://github.com/burugou05-wq/PDF_conversion/releases/tag/v9.9.9.0")
+            && !UpdateChecker.IsTrustedReleasePageUrl("https://evil.example.com/")
+            && !UpdateChecker.IsTrustedReleasePageUrl(
+                "https://github.com/burugou05-wq/PDF_conversion/releases-evil/"));
+        Check("アセット名を安全な文字に限定する", () =>
+            UpdateChecker.IsSafeAssetName("ImageToPDF-Setup-v9.9.9.0-Windows-x64.exe")
+            && !UpdateChecker.IsSafeAssetName("../evil.exe")
+            && !UpdateChecker.IsSafeAssetName("a b.exe"));
 
         // --- バージョン比較 -----------------------------------------------------
         Check("タグの数値化 v1.2.3.4", () => UpdateChecker.TryParseVersion("v1.2.3.4", out var v)
@@ -120,28 +171,40 @@ public static class UpdateSelfTest
         // --- SHA256SUMS の解析 --------------------------------------------------
         var hash = new string('a', 64);
         Check("sha256sum形式を読む",
-            () => UpdateDownloader.FindChecksum($"{hash}  ImageToPDF-v9.9.9.0-Windows-x64.exe\n",
-                "ImageToPDF-v9.9.9.0-Windows-x64.exe") == hash.ToUpperInvariant());
+            () => UpdateDownloader.FindChecksum($"# tag: v9.9.9.0\n{hash}  ImageToPDF-Setup-v9.9.9.0-Windows-x64.exe\n",
+                "ImageToPDF-Setup-v9.9.9.0-Windows-x64.exe") == hash.ToUpperInvariant());
         Check("バイナリモード表記(*付き)を読む",
             () => UpdateDownloader.FindChecksum($"{hash} *app.exe\n", "app.exe") == hash.ToUpperInvariant());
         Check("記載のないファイルは null",
             () => UpdateDownloader.FindChecksum($"{hash}  other.exe\n", "app.exe") is null);
         Check("ハッシュ長が違えば null",
             () => UpdateDownloader.FindChecksum($"abc  app.exe\n", "app.exe") is null);
+        Check("署名検証用の公開鍵が埋め込まれている", () => ReleaseSignature.IsConfigured);
 
-        // --- 実ファイルでの検証 -------------------------------------------------
+        // --- 実ファイルでの検証（一時鍵で署名） -----------------------------------
         var directory = Path.Combine(
             Path.GetTempPath(), "ImageToPDF-UpdateSelfTest-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
         {
-            var assetName = "ImageToPDF-v9.9.9.0-Windows-x64.exe";
+            using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            using var otherKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var testPublicKey = Convert.ToBase64String(signingKey.ExportSubjectPublicKeyInfo());
+
+            byte[] Sign(string text) => signingKey.SignData(
+                Encoding.UTF8.GetBytes(text),
+                HashAlgorithmName.SHA256,
+                DSASignatureFormat.Rfc3279DerSequence);
+
+            var tagName = "v9.9.9.0";
+            var assetName = "ImageToPDF-Setup-v9.9.9.0-Windows-x64.exe";
             var file = Path.Combine(directory, assetName);
             var payload = new byte[4096];
             payload[0] = (byte)'M';
             payload[1] = (byte)'Z';
             Random.Shared.NextBytes(payload.AsSpan(2));
             File.WriteAllBytes(file, payload);
+            void ResetFile() => File.WriteAllBytes(file, payload);
 
             string actual;
             using (var stream = File.OpenRead(file))
@@ -149,20 +212,77 @@ public static class UpdateSelfTest
                 actual = Convert.ToHexString(SHA256.HashData(stream));
             }
 
-            var goodChecksums = $"{actual.ToLowerInvariant()}  {assetName}\n";
-            Check("正しいハッシュで検証が通る", () =>
+            var goodChecksums = $"# tag: {tagName}\n{actual.ToLowerInvariant()}  {assetName}\n";
+            var goodBytes = Encoding.UTF8.GetBytes(goodChecksums);
+            var goodSignature = Sign(goodChecksums);
+
+            Check("正しい署名とハッシュで検証が通る", () =>
             {
-                UpdateDownloader.Verify(file, assetName, goodChecksums);
+                ResetFile();
+                UpdateDownloader.Verify(file, assetName, goodBytes, goodSignature, tagName, testPublicKey);
                 return File.Exists(file);
             });
 
-            var badChecksums = $"{new string('b', 64)}  {assetName}\n";
-            CheckThrows("ハッシュ不一致は中止する", () => UpdateDownloader.Verify(file, assetName, badChecksums));
-            Check("検証に失敗したファイルは削除される", () => !File.Exists(file));
+            var brokenSignature = (byte[])goodSignature.Clone();
+            brokenSignature[brokenSignature.Length - 1] ^= 0x01;
+            CheckThrows("署名の改変は中止する", () =>
+            {
+                ResetFile();
+                UpdateDownloader.Verify(file, assetName, goodBytes, brokenSignature, tagName, testPublicKey);
+            });
+            Check("署名検証に失敗したファイルは削除される", () => !File.Exists(file));
 
-            File.WriteAllBytes(file, payload);
-            CheckThrows("チェックサムに無いファイルは中止する",
-                () => UpdateDownloader.Verify(file, assetName, $"{hash}  other.exe\n"));
+            CheckThrows("埋め込み公開鍵は別の鍵の署名を拒否する", () =>
+            {
+                ResetFile();
+                UpdateDownloader.Verify(file, assetName, goodBytes, goodSignature, tagName);
+            });
+            CheckThrows("署名が空なら中止する", () =>
+            {
+                ResetFile();
+                UpdateDownloader.Verify(
+                    file, assetName, goodBytes, Array.Empty<byte>(), tagName, testPublicKey);
+            });
+            CheckThrows("公開鍵が空なら中止する", () =>
+            {
+                ResetFile();
+                UpdateDownloader.Verify(file, assetName, goodBytes, goodSignature, tagName, string.Empty);
+            });
+
+            var modifiedChecksums = $"# tag: {tagName}\n{new string('b', 64)}  {assetName}\n";
+            CheckThrows("チェックサムの改変は中止する", () =>
+            {
+                ResetFile();
+                UpdateDownloader.Verify(
+                    file, assetName, Encoding.UTF8.GetBytes(modifiedChecksums),
+                    Sign(modifiedChecksums), tagName, testPublicKey);
+            });
+            CheckThrows("チェックサムに無いファイルは中止する", () =>
+            {
+                ResetFile();
+                var text = $"# tag: {tagName}\n{hash}  other.exe\n";
+                UpdateDownloader.Verify(
+                    file, assetName, Encoding.UTF8.GetBytes(text), Sign(text), tagName, testPublicKey);
+            });
+            CheckThrows("タグが違えば中止する", () =>
+            {
+                ResetFile();
+                UpdateDownloader.Verify(file, assetName, goodBytes, goodSignature, "v9.9.9.1", testPublicKey);
+            });
+            CheckThrows("タグの記載がなければ中止する", () =>
+            {
+                ResetFile();
+                var text = $"{actual.ToLowerInvariant()}  {assetName}\n";
+                UpdateDownloader.Verify(
+                    file, assetName, Encoding.UTF8.GetBytes(text), Sign(text), tagName, testPublicKey);
+            });
+            CheckThrows("別の鍵で署名されていれば中止する", () =>
+            {
+                ResetFile();
+                var otherSignature = otherKey.SignData(
+                    goodBytes, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence);
+                UpdateDownloader.Verify(file, assetName, goodBytes, otherSignature, tagName, testPublicKey);
+            });
 
             var notExecutable = Path.Combine(directory, "not-an-exe.exe");
             File.WriteAllText(notExecutable, "plain text");
@@ -172,8 +292,13 @@ public static class UpdateSelfTest
                 notExecutableHash = Convert.ToHexString(SHA256.HashData(stream));
             }
 
-            CheckThrows("MZでないファイルは中止する",
-                () => UpdateDownloader.Verify(notExecutable, "not-an-exe.exe", $"{notExecutableHash}  not-an-exe.exe\n"));
+            var notExecutableChecksums = $"# tag: {tagName}\n{notExecutableHash}  not-an-exe.exe\n";
+            var notExecutableSignature = Sign(notExecutableChecksums);
+            CheckThrows("MZでないファイルは中止する", () =>
+                UpdateDownloader.Verify(
+                    notExecutable, "not-an-exe.exe",
+                    Encoding.UTF8.GetBytes(notExecutableChecksums),
+                    notExecutableSignature, tagName, testPublicKey));
 
             var updatesRoot = Path.Combine(directory, "updates");
             var oldTagDir = Path.Combine(updatesRoot, "v2.3.0.1");
@@ -246,28 +371,56 @@ public static class UpdateSelfTest
     }
 
     /// <summary>GitHub Release API の応答を模したJSONを作ります。</summary>
-    internal static string ReleaseJson(string tag, bool prerelease, bool draft) =>
-        string.Create(CultureInfo.InvariantCulture, $$"""
+    internal static string ReleaseJson(
+        string tag,
+        bool prerelease,
+        bool draft,
+        bool includeInstaller = true,
+        bool includeSignature = true,
+        string host = "github.com")
+    {
+        const string repository = "burugou05-wq/PDF_conversion";
+        var installerName = includeInstaller
+            ? $"ImageToPDF-Setup-{tag}-Windows-x64.exe"
+            : $"ImageToPDF-{tag}-Windows-x64.exe";
+        var assets = new List<object>
         {
-          "tag_name": "{{tag}}",
-          "name": "{{tag}} — テスト用のリリース",
-          "draft": {{(draft ? "true" : "false")}},
-          "prerelease": {{(prerelease ? "true" : "false")}},
-          "published_at": "2026-10-18T09:54:20Z",
-          "html_url": "https://github.com/burugou05-wq/PDF_conversion/releases/tag/{{tag}}",
-          "body": "テスト用のリリースノートです。\r\n\r\n### 変更点\r\n\r\n- 箇条書きの1行目\r\n- 箇条書きの2行目 https://github.com/burugou05-wq/PDF_conversion\r\n",
-          "assets": [
+            new Dictionary<string, object>
             {
-              "name": "ImageToPDF-Setup-{{tag}}-Windows-x64.exe",
-              "size": 123456789,
-              "browser_download_url": "https://github.com/burugou05-wq/PDF_conversion/releases/download/{{tag}}/ImageToPDF-Setup-{{tag}}-Windows-x64.exe"
+                ["name"] = installerName,
+                ["size"] = 123456789,
+                ["browser_download_url"] =
+                    $"https://{host}/{repository}/releases/download/{tag}/{installerName}",
             },
+            new Dictionary<string, object>
             {
-              "name": "SHA256SUMS.txt",
-              "size": 103,
-              "browser_download_url": "https://github.com/burugou05-wq/PDF_conversion/releases/download/{{tag}}/SHA256SUMS.txt"
-            }
-          ]
+                ["name"] = "SHA256SUMS.txt",
+                ["size"] = 103,
+                ["browser_download_url"] =
+                    $"https://{host}/{repository}/releases/download/{tag}/SHA256SUMS.txt",
+            },
+        };
+        if (includeSignature)
+        {
+            assets.Add(new Dictionary<string, object>
+            {
+                ["name"] = ReleaseSignature.SignatureAssetName,
+                ["size"] = 72,
+                ["browser_download_url"] =
+                    $"https://{host}/{repository}/releases/download/{tag}/{ReleaseSignature.SignatureAssetName}",
+            });
         }
-        """);
+
+        return JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["tag_name"] = tag,
+            ["name"] = $"{tag} — テスト用のリリース",
+            ["draft"] = draft,
+            ["prerelease"] = prerelease,
+            ["published_at"] = "2026-10-18T09:54:20Z",
+            ["html_url"] = $"https://github.com/{repository}/releases/tag/{tag}",
+            ["body"] = "テスト用のリリースノートです。\r\n\r\n### 変更点\r\n\r\n- 箇条書きの1行目\r\n- 箇条書きの2行目 https://github.com/burugou05-wq/PDF_conversion\r\n",
+            ["assets"] = assets,
+        });
+    }
 }

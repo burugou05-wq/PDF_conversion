@@ -1,5 +1,41 @@
 # 更新履歴
 
+## 未リリース — 自動更新とリリース経路のセキュリティ強化
+
+リリース作業は [RELEASING.md](RELEASING.md) にまとめました。**反映には GitHub 側の設定
+（`release` environment の承認者とシークレット `RELEASE_SIGNING_KEY_B64`、Immutable
+Releases、タグ保護）が必要です。**
+
+### リリースの不変化（A-1）
+
+- `publish-release` は `v*` タグの push だけで動くようにしました。`workflow_dispatch` は
+  テストとビルドだけを行い、Release を公開・変更できません。タグを指定して手動実行しても
+  公開ジョブはスキップされます。
+- 既存 Release の Assets を `--clobber` で差し替える処理を削除しました。同名タグの
+  Release がある場合はジョブが失敗します。`--verify-tag` でタグの実在も確認します。
+- `release` environment（承認者必須）、`id-token: write` / `attestations: write`、
+  `actions/attest-build-provenance` による来歴証明を追加しました。
+
+### 署名付きチェックサム（A-2）
+
+- `SHA256SUMS.txt` に `# tag: v<バージョン>` 行を追加し、ECDSA P-256 で署名した
+  `SHA256SUMS.txt.sig` を Release に同梱します。アプリは内蔵公開鍵で署名を検証してから
+  ハッシュを照合します。SHA-256 の一致だけでは真正性を保証できないためです。
+- チェックサムのタグと Release のタグの一致も確認し、正規の古い Assets の使い回し
+  （ダウングレード）を防ぎます。署名のないリリースは自動更新しません。
+- 配布 URL のホストとパスを許可リストで制限し、リダイレクト先も1ホップずつ検査します。
+  MZ ヘッダー確認は形式チェック（破損検出）であることを明記しました。
+- コード署名（Authenticode）と Mark of the Web は未対応です。未署名のままサイレント
+  インストールされる経路が残るため、[RELEASING.md](RELEASING.md#残っているリスク未対応)
+  に対策案を記載しました。
+
+### タイムアウトと旧経路の削除（A-3 / A-4）
+
+- `HttpClient.Timeout` を廃し、API 確認15秒、ヘッダー待ち30秒、ダウンロード本体は
+  無通信60秒（読み込みごとに延長）としました。途中で回線が止まっても無限待ちしません。
+- 単体 EXE 版（v2.3.0.x）からの移行用だった `ExecutablePrefix` と、インストーラー以外を
+  起動する分岐を削除しました。配布形式はインストーラーに一本化されています。
+
 ## v2.3.1.0 — インストーラー配布と上書き自動アップデートへの移行
 
 配布形式を単体EXEから **Inno Setup によるインストーラー（`ImageToPDF-Setup-v2.3.1.0-Windows-x64.exe`）** に移行しました。アップデート時に古いEXEや一時ファイルが残らず、ショートカットもそのまま使い続けられます。

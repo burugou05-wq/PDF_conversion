@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 
@@ -20,7 +19,8 @@ public sealed record UpdateRelease(
     string? AssetName,
     string? DownloadUrl,
     long DownloadSize,
-    string? ChecksumsUrl);
+    string? ChecksumsUrl,
+    string? SignatureUrl);
 
 /// <summary>
 /// アップデート確認の結果です。通信できなかった場合も <see cref="Error"/> に理由を入れ、
@@ -38,6 +38,10 @@ public sealed record UpdateCheckResult(UpdateRelease? Release, DateTimeOffset? C
 /// User-Agent と標準ヘッダーだけです。識別子や利用状況は送りません。
 /// 結果は <c>%LOCALAPPDATA%\ImageToPDF\update-cache.json</c> に保存し、
 /// 自動確認は6時間に1回だけ、手動（バージョン表示のタップ）では常に取り直します。
+///
+/// キャッシュはユーザーが書き換えられるため、タグ名・アセット名・URL はここで
+/// 厳しく検証します。配布物の真正性は <see cref="ReleaseSignature"/> による
+/// チェックサムファイルの署名検証で別途担保します。
 /// </summary>
 public static class UpdateChecker
 {
@@ -50,9 +54,11 @@ public static class UpdateChecker
     public const string DisableVariable = "IMAGETOPDF_DISABLE_UPDATE_CHECK";
 
     private const string ChecksumsAssetName = "SHA256SUMS.txt";
+    private const string SignatureAssetName = ReleaseSignature.SignatureAssetName;
     private const string ExecutableSuffix = ".exe";
     private const string InstallerPrefix = "ImageToPDF-Setup-";
-    private const string ExecutablePrefix = "ImageToPDF-";
+    private const string ReleaseDownloadPrefix = "/" + Repository + "/releases/download/";
+    private const string ReleasePagePrefix = "/" + Repository + "/releases";
 
     private static readonly TimeSpan AutomaticCheckInterval = TimeSpan.FromHours(6);
 
@@ -96,9 +102,10 @@ public static class UpdateChecker
         {
             try
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseApiUrl);
-                using var response = await UpdateHttp.Client.SendAsync(
-                    request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+                // 起動時の確認は15秒で打ち切ります（HttpClient.Timeout は使いません）。
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(UpdateHttp.ApiTimeout);
+                using var response = await UpdateHttp.GetApiAsync(LatestReleaseApiUrl, timeout.Token);
                 if (!response.IsSuccessStatusCode)
                 {
                     error = $"GitHub API が {(int)response.StatusCode} を返しました";
@@ -106,7 +113,7 @@ public static class UpdateChecker
                 }
                 else
                 {
-                    payload = await response.Content.ReadAsStringAsync(cancellationToken);
+                    payload = await response.Content.ReadAsStringAsync(timeout.Token);
                     checkedAt = DateTimeOffset.UtcNow;
                     WriteCache(CacheFilePath, checkedAt.Value, payload);
                 }
@@ -122,7 +129,8 @@ public static class UpdateChecker
                 throw;
             }
             catch (Exception exception) when (
-                exception is HttpRequestException or IOException or UriFormatException)
+                exception is HttpRequestException or IOException or UriFormatException
+                    or InvalidOperationException)
             {
                 error = "GitHubに接続できませんでした";
                 AppLog.Warning($"アップデート確認: 接続できませんでした: {exception.GetType().Name}");
@@ -173,6 +181,12 @@ public static class UpdateChecker
         }
 
         var tagName = GetString(root, "tag_name");
+        // URL のパスに使うため、タグは "v" + 数字とドットだけに限定します。
+        if (!IsSafeTagName(tagName))
+        {
+            return null;
+        }
+
         if (!TryParseVersion(tagName, out var version))
         {
             return null;
@@ -186,31 +200,25 @@ public static class UpdateChecker
         string? assetName = null;
         string? downloadUrl = null;
         string? checksumsUrl = null;
+        string? signatureUrl = null;
         long downloadSize = 0;
-        var hasInstallerAsset = false;
         if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
         {
             foreach (var asset in assets.EnumerateArray())
             {
                 var name = GetString(asset, "name");
                 var url = GetString(asset, "browser_download_url");
-                if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(url))
+                if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(url)
+                    || !IsSafeAssetName(name)
+                    || !IsTrustedAssetUrl(url, tagName!, name))
                 {
                     continue;
                 }
 
+                // v2.3.0.x の単体 EXE 移行経路は廃止しました。インストーラーだけを選びます。
                 var isInstaller = name.EndsWith(ExecutableSuffix, StringComparison.OrdinalIgnoreCase)
                     && name.StartsWith(InstallerPrefix, StringComparison.OrdinalIgnoreCase);
-                var isExecutable = name.EndsWith(ExecutableSuffix, StringComparison.OrdinalIgnoreCase)
-                    && name.StartsWith(ExecutablePrefix, StringComparison.OrdinalIgnoreCase);
-                if (isInstaller && !hasInstallerAsset)
-                {
-                    assetName = name;
-                    downloadUrl = url;
-                    downloadSize = GetInt64(asset, "size");
-                    hasInstallerAsset = true;
-                }
-                else if (isExecutable && downloadUrl is null)
+                if (isInstaller && assetName is null)
                 {
                     assetName = name;
                     downloadUrl = url;
@@ -221,19 +229,111 @@ public static class UpdateChecker
                 {
                     checksumsUrl = url;
                 }
+                else if (signatureUrl is null
+                    && string.Equals(name, SignatureAssetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    signatureUrl = url;
+                }
             }
         }
 
+        var pageUrl = GetString(root, "html_url");
         return new UpdateRelease(
             version,
             tagName!,
             GetString(root, "body") ?? string.Empty,
             TryGetDateTimeOffset(root, "published_at"),
-            GetString(root, "html_url") ?? ReleasesPageUrl,
+            IsTrustedReleasePageUrl(pageUrl) ? pageUrl! : ReleasesPageUrl,
             assetName,
             downloadUrl,
             downloadSize,
-            checksumsUrl);
+            checksumsUrl,
+            signatureUrl);
+    }
+
+    /// <summary>URL のパスに埋め込んでも安全なタグ（"v" + 2〜4個の数字列）だけを通します。</summary>
+    internal static bool IsSafeTagName(string? tagName)
+    {
+        if (string.IsNullOrEmpty(tagName) || tagName.Length > 32 || tagName[0] != 'v')
+        {
+            return false;
+        }
+
+        var parts = tagName[1..].Split('.');
+        if (parts.Length is < 2 or > 4)
+        {
+            return false;
+        }
+
+        foreach (var part in parts)
+        {
+            if (part.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (var character in part)
+            {
+                if (!char.IsAsciiDigit(character))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>アセット名は区切り文字を含まないファイル名だけを許可します。</summary>
+    internal static bool IsSafeAssetName(string? name)
+    {
+        if (string.IsNullOrEmpty(name) || name.Length > 128 || name is "." or "..")
+        {
+            return false;
+        }
+
+        foreach (var character in name)
+        {
+            if (!char.IsAsciiLetterOrDigit(character) && character is not ('.' or '-' or '_'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// キャッシュされた <c>browser_download_url</c> が、このリポジトリの該当タグの
+    /// Release ダウンロード URL と一致することを確認します（ホストは UpdateHttp が検査）。
+    /// </summary>
+    internal static bool IsTrustedAssetUrl(string? url, string tagName, string assetName)
+    {
+        if (!UpdateHttp.IsAllowedAssetUrl(url)
+            || !Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || uri.Query.Length != 0
+            || uri.Fragment.Length != 0)
+        {
+            return false;
+        }
+
+        var expected = ReleaseDownloadPrefix + tagName + "/" + assetName;
+        return string.Equals(
+            Uri.UnescapeDataString(uri.AbsolutePath),
+            expected,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>リリースページのリンク先も GitHub のこのリポジトリに限定します。</summary>
+    internal static bool IsTrustedReleasePageUrl(string? url)
+    {
+        return Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            && uri.Scheme == Uri.UriSchemeHttps
+            && uri.Port == 443
+            && uri.UserInfo.Length == 0
+            && string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase)
+            && (uri.AbsolutePath.Equals(ReleasePagePrefix, StringComparison.Ordinal)
+                || uri.AbsolutePath.StartsWith(ReleasePagePrefix + "/", StringComparison.Ordinal));
     }
 
     /// <summary>"v2.3.0.0" のようなタグを数値のバージョンに変換します。</summary>
@@ -380,22 +480,5 @@ public static class UpdateChecker
             // キャッシュは補助なので、書けなくても確認自体は成立します。
             AppLog.Warning($"アップデート確認: キャッシュを保存できません: {exception.GetType().Name}");
         }
-    }
-}
-
-/// <summary>アップデート関連のHTTPクライアント（共通のヘッダーとタイムアウト）。</summary>
-internal static class UpdateHttp
-{
-    internal static readonly HttpClient Client = Create();
-
-    private static HttpClient Create()
-    {
-        var handler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.All };
-        var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd(
-            "ImageToPDF/" + AppLog.NumericVersion.ToString(4));
-        client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
-        client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
-        return client;
     }
 }
