@@ -1,0 +1,42 @@
+# Temporary post-publication verification for v2.3.1.1.
+# Removed again once the published assets, signature and provenance are checked.
+name: Verify published release (temporary)
+
+on:
+  push:
+    paths:
+      - .github/workflows/verify-release.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - name: Verify published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v2.3.1.1"
+          mkdir -p /tmp/rel
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir /tmp/rel
+          cd /tmp/rel
+          echo "== downloaded assets =="
+          ls -l
+          echo "== checksums =="
+          sha256sum -c SHA256SUMS.txt
+          grep -Fx "# tag: $tag" SHA256SUMS.txt
+          echo "== detached signature =="
+          python "$GITHUB_WORKSPACE/scripts/release_signing.py" verify \
+            --checksums SHA256SUMS.txt --signature SHA256SUMS.txt.sig
+          echo "== build provenance =="
+          gh attestation verify "ImageToPDF-Setup-$tag-Windows-x64.exe" --owner burugou05-wq
+          gh attestation verify SHA256SUMS.txt --owner burugou05-wq
