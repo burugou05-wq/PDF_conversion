@@ -499,10 +499,11 @@ try {
     # checksum file cannot be replayed for a different release tag.
     $ChecksumHeader = "# tag: v$Version"
     $ChecksumLine = "$Hash  $ReleaseName"
-    Set-Content -Path $ChecksumPath -Value @($ChecksumHeader, $ChecksumLine) -Encoding ASCII
-    $ExpectedChecksumContent = "$ChecksumHeader`n$ChecksumLine"
-    $ActualChecksumContent = ([System.IO.File]::ReadAllText($ChecksumPath)).Replace("`r`n", "`n").Trim()
-    if ($ActualChecksumContent -ne $ExpectedChecksumContent) {
+    # LF-only, BOM-less ASCII: the exact bytes are what the detached signature covers.
+    $ExpectedChecksumContent = "$ChecksumHeader`n$ChecksumLine`n"
+    [System.IO.File]::WriteAllText(
+        $ChecksumPath, $ExpectedChecksumContent, [System.Text.Encoding]::ASCII)
+    if (([System.IO.File]::ReadAllText($ChecksumPath)) -ne $ExpectedChecksumContent) {
         throw "Checksum file does not match the release installer."
     }
 

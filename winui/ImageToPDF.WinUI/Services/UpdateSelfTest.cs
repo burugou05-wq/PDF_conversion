@@ -181,6 +181,27 @@ public static class UpdateSelfTest
             () => UpdateDownloader.FindChecksum($"abc  app.exe\n", "app.exe") is null);
         Check("署名検証用の公開鍵が埋め込まれている", () => ReleaseSignature.IsConfigured);
 
+        // OpenSSL の "dgst -sha256 -sign" が出力する DER 署名を .NET の
+        // DSASignatureFormat.Rfc3279DerSequence で検証できることを確認します。
+        // テスト専用の鍵で作った固定データ（リリース署名とは無関係）です。
+        const string openSslTestPublicKey =
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkeMU5LQmJ0FWGjY3pKc209jRKgiN5lAas5tXaBAGvqDtIU591QDv7Yusr03W5jEmY+MNybQ8i4pvdxYU8IIsuw==";
+        var openSslTestSignature = Convert.FromBase64String(
+            "MEQCIAyT/yTwuhp8T4f+pGz7XlN1+D5y5NBGWAmte9IBnSquAiBM8X9aKDxCneHsAeL2amU8we9fEsNVECbLj4lbkVX9zA==");
+        var openSslTestChecksums = Encoding.UTF8.GetBytes(
+            $"# tag: v9.9.9.0\n{new string('a', 64)}  ImageToPDF-Setup-v9.9.9.0-Windows-x64.exe\n");
+        Check("OpenSSL の DER 署名を検証できる", () =>
+        {
+            ReleaseSignature.Verify(openSslTestChecksums, openSslTestSignature, openSslTestPublicKey);
+            return true;
+        });
+        CheckThrows("OpenSSL 署名の改変は拒否する", () =>
+        {
+            var broken = (byte[])openSslTestSignature.Clone();
+            broken[broken.Length - 1] ^= 0x01;
+            ReleaseSignature.Verify(openSslTestChecksums, broken, openSslTestPublicKey);
+        });
+
         // --- 実ファイルでの検証（一時鍵で署名） -----------------------------------
         var directory = Path.Combine(
             Path.GetTempPath(), "ImageToPDF-UpdateSelfTest-" + Guid.NewGuid().ToString("N"));

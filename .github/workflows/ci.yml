@@ -123,7 +123,8 @@ jobs:
           fi
           test -f release-assets/SHA256SUMS.txt
           compgen -G 'release-assets/ImageToPDF-Setup-*.exe' >/dev/null
-          grep -Fxq "# tag: $tag" release-assets/SHA256SUMS.txt || {
+          # Windows ビルドは LF で書き出しますが、念のため CR を除いて照合します。
+          grep -Fxq "# tag: $tag" <(tr -d '\r' < release-assets/SHA256SUMS.txt) || {
             echo "SHA256SUMS.txt does not declare tag $tag" >&2
             exit 1
           }
