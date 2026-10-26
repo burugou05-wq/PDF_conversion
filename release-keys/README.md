@@ -14,6 +14,10 @@
 | `release-p256.key.b64` | ↑ の Base64（`RELEASE_SIGNING_KEY_B64` の値） | **秘密**。↑ と同じ扱い。 |
 | `README.md` | このファイル | 公開 |
 
+> 2026-10-26 更新: Agent のワークスペース復元時に gitignore 済みの初回鍵が失われたため、
+> v2.3.1.1 の公開前に鍵ペアを再生成し、`sync-public-key` で埋め込み公開鍵を差し替えました。
+> 旧公開鍵は一度も Release に含まれていないため、利用者への影響はありません。
+
 - 埋め込み公開鍵（SPKI / Base64）: `python scripts/release_signing.py public-key --private-key release-keys/release-p256.key`
 - 一致確認: `python scripts/release_signing.py check --private-key release-keys/release-p256.key`
 
