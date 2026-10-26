@@ -11,3 +11,11 @@ dist/
 .vs/
 *.log
 pytest-results.xml
+
+# Release signing private keys. These must never be committed: the matching
+# public key is embedded in Services/ReleaseSignature.cs, and the private key
+# belongs in the protected "release" GitHub environment.
+release-keys/*.key
+release-keys/*.key.b64
+release-keys/*.pem
+release-keys/*.der

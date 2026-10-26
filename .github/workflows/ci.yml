@@ -63,14 +63,21 @@ jobs:
             dist/THIRD_PARTY_NOTICES.md
           if-no-files-found: error
 
+  # Publishing is only possible from a version tag push. workflow_dispatch and
+  # pull requests can still build/test, but they can never touch a release.
+  # Configure the "release" environment with required reviewers before tagging.
   publish-release:
-    if: >-
-      startsWith(github.ref, 'refs/tags/v') ||
-      github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: winui-build
     runs-on: ubuntu-latest
+    environment: release
+    concurrency:
+      group: publish-release-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -92,18 +99,64 @@ jobs:
         with:
           name: ImageToPDF-WinUI-Release
           path: release-assets
-      - name: Publish release assets
+      - name: Refuse to modify an existing release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          set -euo pipefail
+          tag="${{ steps.release-tag.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; refusing to modify assets" >&2
+            exit 1
+          fi
+      - name: Sign SHA256SUMS.txt (ECDSA P-256)
+        env:
+          RELEASE_SIGNING_KEY_B64: ${{ secrets.RELEASE_SIGNING_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.release-tag.outputs.tag }}"
+          if [[ -z "$RELEASE_SIGNING_KEY_B64" ]]; then
+            echo "::error::release environment secret RELEASE_SIGNING_KEY_B64 is not set" >&2
+            exit 1
+          fi
+          test -f release-assets/SHA256SUMS.txt
+          compgen -G 'release-assets/ImageToPDF-Setup-*.exe' >/dev/null
+          # Windows ビルドは LF で書き出しますが、念のため CR を除いて照合します。
+          grep -Fxq "# tag: $tag" <(tr -d '\r' < release-assets/SHA256SUMS.txt) || {
+            echo "SHA256SUMS.txt does not declare tag $tag" >&2
+            exit 1
+          }
+          key="$RUNNER_TEMP/release-p256.key"
+          ( umask 077; printf '%s' "$RELEASE_SIGNING_KEY_B64" | base64 --decode > "$key" )
+          python scripts/release_signing.py check --private-key "$key"
+          python scripts/release_signing.py sign \
+            --private-key "$key" \
+            --checksums release-assets/SHA256SUMS.txt \
+            --output release-assets/SHA256SUMS.txt.sig
+          rm -f "$key"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release-assets/ImageToPDF-Setup-*.exe
+            release-assets/SHA256SUMS.txt
+      - name: Publish (immutable)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
           tag="${{ steps.release-tag.outputs.tag }}"
           # The release page body is the matching CHANGELOG.md section.
           awk -v heading="## $tag " 'index($0, heading) == 1 { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > release-notes.md
-          title="$(grep -m1 "^## $tag " CHANGELOG.md | sed 's/^## //')"
+          title="$(grep -m1 "^## $tag " CHANGELOG.md | sed 's/^## //' || true)"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" release-assets/* --clobber
-          else
-            # Pin the tag to the commit that was built, not the default branch head.
-            gh release create "$tag" release-assets/* --target "$GITHUB_SHA" --title "${title:-$tag}" --notes-file release-notes.md
+            echo "Release $tag already exists; refusing to modify assets" >&2
+            exit 1
           fi
+          # --verify-tag keeps the release pinned to the tag that triggered CI,
+          # not to a tag that gh would create from the default branch.
+          gh release create "$tag" release-assets/* \
+            --target "$GITHUB_SHA" --verify-tag \
+            --title "${title:-$tag}" --notes-file release-notes.md

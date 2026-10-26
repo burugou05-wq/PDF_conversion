@@ -495,9 +495,15 @@ try {
     Copy-Item -LiteralPath (Join-Path $RepoRoot "LICENSE") -Destination $DistDirectory -Force
     Copy-Item -LiteralPath (Join-Path $RepoRoot "THIRD_PARTY_NOTICES.md") -Destination $DistDirectory -Force
     $Hash = (Get-FileHash -LiteralPath $ReleaseExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+    # The tag header is covered by the detached ECDSA signature, so a signed
+    # checksum file cannot be replayed for a different release tag.
+    $ChecksumHeader = "# tag: v$Version"
     $ChecksumLine = "$Hash  $ReleaseName"
-    Set-Content -Path $ChecksumPath -Value $ChecksumLine -Encoding ASCII
-    if (([System.IO.File]::ReadAllText($ChecksumPath)).Trim() -ne $ChecksumLine) {
+    # LF-only, BOM-less ASCII: the exact bytes are what the detached signature covers.
+    $ExpectedChecksumContent = "$ChecksumHeader`n$ChecksumLine`n"
+    [System.IO.File]::WriteAllText(
+        $ChecksumPath, $ExpectedChecksumContent, [System.Text.Encoding]::ASCII)
+    if (([System.IO.File]::ReadAllText($ChecksumPath)) -ne $ExpectedChecksumContent) {
         throw "Checksum file does not match the release installer."
     }
 
