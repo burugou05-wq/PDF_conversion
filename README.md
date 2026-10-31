@@ -6,7 +6,7 @@ Windows 11向けのネイティブ画面（WinUI 3）で、画像を並べてPDF
 
 ## インストーラーのダウンロード（一般ユーザー向け）
 
-[最新のGitHub Release](https://github.com/saikusu-piko/PDF_conversion/releases/latest) の「Assets」から、`ImageToPDF-Setup-v<version>-Windows-x64.exe` をダウンロードして実行してください。ZIPの展開や、Pythonのインストール、管理者権限は不要です。
+[最新のGitHub Release](https://github.com/burugou05-wq/PDF_conversion/releases/latest) の「Assets」から、`ImageToPDF-Setup-v<version>-Windows-x64.exe` をダウンロードして実行してください。ZIPの展開や、Pythonのインストール、管理者権限は不要です。
 
 - ユーザー領域（既定では `%LOCALAPPDATA%\Programs\ImageToPDF\ImageToPDF.exe`）にインストールされ、スタートメニューにショートカットを作成します。インストール画面の**「デスクトップ上にアイコンを作成する」チェックボックス**でデスクトップショートカットの有無を選べます。
 - 初回起動時、アプリ内の変換エンジンを `%LOCALAPPDATA%\ImageToPDF\worker` に展開します。
