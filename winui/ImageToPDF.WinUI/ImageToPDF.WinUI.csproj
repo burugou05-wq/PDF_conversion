@@ -19,8 +19,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <!-- Release version is supplied by build_winui.ps1 from app_config.py. -->
-    <Version Condition="'$(Version)' == ''">2.3.1.1</Version>
-    <!-- Official release: one self-contained EXE. The Python worker is embedded as a resource. -->
+    <Version Condition="'$(Version)' == ''">2.3.1.2</Version>
+
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>

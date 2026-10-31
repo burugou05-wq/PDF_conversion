@@ -149,8 +149,11 @@ public sealed class MainViewModel
     }
 
     private static IEnumerable<string> GetFolderImages(string folder, FolderSortMode sortMode)
+        => SortPaths(Directory.EnumerateFiles(folder).Where(IsSupported), sortMode);
+
+    /// <summary>フォルダー追加・ファイル追加・ドロップで共通の並び替えです。</summary>
+    private static IEnumerable<string> SortPaths(IEnumerable<string> paths, FolderSortMode sortMode)
     {
-        var paths = Directory.EnumerateFiles(folder).Where(IsSupported);
         return sortMode switch
         {
             FolderSortMode.Number => paths.OrderBy(

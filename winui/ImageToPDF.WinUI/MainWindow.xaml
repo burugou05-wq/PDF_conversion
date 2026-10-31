@@ -121,7 +121,7 @@
                 AutomationProperties.Name="バージョン情報とアップデートを確認します">
                 <Grid>
                     <TextBlock
-                        Text="v2.3.1.1"
+                        Text="v2.3.1.2"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <Ellipse
                         x:Name="UpdateBadge"
@@ -129,7 +129,7 @@
                         Height="9"
                         Margin="0,-3,-8,0"
                         HorizontalAlignment="Right"
-                        VerticalAlignment="Top"
+
                         Visibility="Collapsed"
                         Fill="{ThemeResource AccentFillColorDefaultBrush}" />
                 </Grid>
@@ -222,9 +222,14 @@
                     </StackPanel>
                 </Grid>
                 <Grid Grid.Row="1">
+                    <!--
+                        Multiple だと全行にチェックボックスが出て、どこをクリックしても選択が
+                        トグル（常にCtrlを押した状態）になります。Extended ならクリックで1件、
+                        Ctrl/Shift を押したときだけ複数選択になり、エクスプローラーと同じ操作感です。
+                    -->
                     <ListView
                         x:Name="FilesList"
-                        SelectionMode="Multiple"
+                        SelectionMode="Extended"
                         ItemsSource="{x:Bind ViewModel.VisibleItems, Mode=OneWay}"
                         ItemsPanel="{StaticResource ListPanel}"
                         ItemTemplate="{StaticResource RowTemplate}"
