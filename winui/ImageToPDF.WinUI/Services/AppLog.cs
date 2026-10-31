@@ -180,7 +180,17 @@ public static class AppLog
     {
         // InformationalVersion にはビルド由来の "+<hash>" が付くことがあります。
         var text = ApplicationVersion.Split('+')[0];
-        return Version.TryParse(text, out var version) ? version : new Version(0, 0, 0, 0);
+        if (!Version.TryParse(text, out var version))
+        {
+            return new Version(0, 0, 0, 0);
+        }
+
+        // "2.3.2" のような3要素でも ToString(4) と比較が常に動くよう4要素にそろえます。
+        return new Version(
+            version.Major,
+            version.Minor,
+            version.Build < 0 ? 0 : version.Build,
+            version.Revision < 0 ? 0 : version.Revision);
     }
 
     private static string Format(string level, string message, Exception? error)

@@ -245,34 +245,27 @@ public sealed partial class MainWindow
         args.Handled = true;
     }
 
-    /// <summary>右クリックメニューの対象。Tag に ImageEntry を入れたコンテナから取ります。</summary>
-    private static ImageEntry? EntryFromMenu(object sender)
+    /// <summary>右クリックされた項目。共有 MenuFlyout には DataContext が渡らないため、ここで覚えます。</summary>
+    private ImageEntry? _contextEntry;
+
+    private void Item_RightTapped(object sender, RightTappedRoutedEventArgs e)
     {
-        if (sender is MenuFlyoutItem item && item.DataContext is ImageEntry fromContext)
+        _contextEntry = (sender as FrameworkElement)?.DataContext as ImageEntry;
+        // 右クリックした項目が未選択なら、その1件を選択してメニュー操作の対象にします。
+        if (_contextEntry is not null && !FilesList.SelectedItems.Contains(_contextEntry))
         {
-            return fromContext;
+            FilesList.SelectedItems.Clear();
+            FilesList.SelectedItems.Add(_contextEntry);
         }
-
-        // MenuFlyout を StaticResource で共有すると DataContext が渡らないことがあるため、
-        // 開いた元の要素（Tag）から辿ります。
-        if (sender is FrameworkElement element
-            && element.Tag is ImageEntry fromTag)
-        {
-            return fromTag;
-        }
-
-        return null;
     }
 
     private ImageEntry? ContextTarget(object sender)
     {
-        var entry = EntryFromMenu(sender);
-        if (entry is not null)
+        if (_contextEntry is not null && ViewModel.Items.Contains(_contextEntry))
         {
-            return entry;
+            return _contextEntry;
         }
 
-        // Flyout の起点が取れない場合は、選択中の先頭を対象にします。
         return FilesList.SelectedItems.OfType<ImageEntry>().FirstOrDefault();
     }
 

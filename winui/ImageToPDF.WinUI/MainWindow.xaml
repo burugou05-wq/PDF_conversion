@@ -43,16 +43,13 @@
                 <MenuFlyoutItem Text="これより上を削除" Click="RemoveAbove_Click" />
                 <MenuFlyoutItem Text="これより下を削除" Click="RemoveBelow_Click" />
                 <MenuFlyoutItem Text="選択を削除" Click="RemoveButton_Click">
-                    <MenuFlyoutItem.KeyboardAccelerators>
-                        <KeyboardAccelerator Key="Delete" />
-                    </MenuFlyoutItem.KeyboardAccelerators>
                     <MenuFlyoutItem.Icon>
                         <FontIcon Glyph="&#xE74D;" />
                     </MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
             </MenuFlyout>
             <DataTemplate x:Key="RowTemplate" x:DataType="models:ImageEntry">
-                <Border Padding="10,8" ContextFlyout="{StaticResource ItemMenu}" Tag="{x:Bind}">
+                <Border Padding="10,8" ContextFlyout="{StaticResource ItemMenu}" RightTapped="Item_RightTapped">
                     <Grid ColumnDefinitions="32,*,Auto" ColumnSpacing="12">
                         <FontIcon
                             Glyph="{x:Bind IconGlyph}"
@@ -79,7 +76,7 @@
                 </Border>
             </DataTemplate>
             <DataTemplate x:Key="TileTemplate" x:DataType="models:ImageEntry">
-                <Grid Width="166" Padding="8,6" RowSpacing="6" ContextFlyout="{StaticResource ItemMenu}" Tag="{x:Bind}">
+                <Grid Width="166" Padding="8,6" RowSpacing="6" ContextFlyout="{StaticResource ItemMenu}" RightTapped="Item_RightTapped">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="105" />
                         <RowDefinition Height="Auto" />
