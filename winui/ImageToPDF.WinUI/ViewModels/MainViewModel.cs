@@ -27,12 +27,34 @@ public sealed class MainViewModel
 
     public IReadOnlyList<ImageEntry> Items => _items;
 
+    /// <summary>
+    /// 画像ファイルやフォルダーを一覧に追加します。
+    /// ドラッグ＆ドロップやファイル選択ダイアログは、掴んだファイルやクリック順でパスを渡してくるため、
+    /// 渡された順序ではなく、フォルダー追加と同じ並び順（名前順・数字順・更新日時順）でそろえてから追加します。
+    /// フォルダーはそれぞれの中身を並べ替え、ファイルとフォルダーの前後関係は渡された順を保ちます。
+    /// </summary>
     public int AddPaths(IEnumerable<string> values, FolderSortMode folderSort)
     {
         var knownPaths = new HashSet<string>(
             _items.Select(item => item.FullPath),
             StringComparer.OrdinalIgnoreCase);
         var added = 0;
+        var pendingFiles = new List<string>();
+
+        void FlushPendingFiles()
+        {
+            if (pendingFiles.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var candidate in SortPaths(pendingFiles, folderSort))
+            {
+                added += AddCandidate(candidate, knownPaths) ? 1 : 0;
+            }
+
+            pendingFiles.Clear();
+        }
 
         foreach (var value in values)
         {
@@ -41,35 +63,35 @@ public sealed class MainViewModel
                 continue;
             }
 
-            IEnumerable<string> candidates;
             if (Directory.Exists(value))
             {
-                candidates = GetFolderImages(value, folderSort);
+                FlushPendingFiles();
+                foreach (var candidate in GetFolderImages(value, folderSort))
+                {
+                    added += AddCandidate(candidate, knownPaths) ? 1 : 0;
+                }
             }
             else if (File.Exists(value) && IsSupported(value))
             {
-                candidates = new[] { value };
-            }
-            else
-            {
-                continue;
-            }
-
-            foreach (var candidate in candidates)
-            {
-                var fullPath = Path.GetFullPath(candidate);
-                if (!IsSupported(fullPath) || !knownPaths.Add(fullPath))
-                {
-                    continue;
-                }
-
-                _items.Add(new ImageEntry(fullPath));
-                added++;
+                pendingFiles.Add(value);
             }
         }
 
+        FlushPendingFiles();
         Refresh();
         return added;
+    }
+
+    private bool AddCandidate(string candidate, HashSet<string> knownPaths)
+    {
+        var fullPath = Path.GetFullPath(candidate);
+        if (!IsSupported(fullPath) || !knownPaths.Add(fullPath))
+        {
+            return false;
+        }
+
+        _items.Add(new ImageEntry(fullPath));
+        return true;
     }
 
     public void SetSearchText(string value)

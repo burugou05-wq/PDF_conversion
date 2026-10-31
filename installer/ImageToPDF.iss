@@ -1,7 +1,7 @@
-#ifndef AppVersion
+﻿#ifndef AppVersion
   #define AppVersion "2.3.1.2"
 #endif
-
+#ifndef SourceExe
   #define SourceExe "..\build_tmp\winui-publish\ImageToPDF.WinUI.exe"
 #endif
 #ifndef OutputDir
@@ -14,9 +14,9 @@ AppName=画像PDF変換ツール
 AppVersion={#AppVersion}
 AppVerName=画像PDF変換ツール v{#AppVersion}
 VersionInfoVersion={#AppVersion}
-AppPublisher=burugou05-wq
-AppSupportURL=https://github.com/burugou05-wq/PDF_conversion
-AppUpdatesURL=https://github.com/burugou05-wq/PDF_conversion/releases
+AppPublisher=saikusu-piko
+AppSupportURL=https://github.com/saikusu-piko/PDF_conversion
+AppUpdatesURL=https://github.com/saikusu-piko/PDF_conversion/releases
 DefaultDirName={autopf}\ImageToPDF
 DefaultGroupName=画像PDF変換ツール
 DisableProgramGroupPage=yes

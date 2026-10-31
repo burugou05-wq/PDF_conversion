@@ -129,7 +129,7 @@
                         Height="9"
                         Margin="0,-3,-8,0"
                         HorizontalAlignment="Right"
-
+                        VerticalAlignment="Top"
                         Visibility="Collapsed"
                         Fill="{ThemeResource AccentFillColorDefaultBrush}" />
                 </Grid>

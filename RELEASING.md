@@ -76,7 +76,7 @@ python scripts/release_signing.py check --private-key release-keys/release-p256.
 python scripts/release_signing.py verify \
     --checksums dist/SHA256SUMS.txt --signature dist/SHA256SUMS.txt.sig
 gh attestation verify dist/ImageToPDF-Setup-v<version>-Windows-x64.exe \
-    --owner burugou05-wq
+    --owner saikusu-piko
 ```
 
 ## 通常のリリース手順

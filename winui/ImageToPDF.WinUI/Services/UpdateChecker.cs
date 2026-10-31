@@ -45,7 +45,7 @@ public sealed record UpdateCheckResult(UpdateRelease? Release, DateTimeOffset? C
 /// </summary>
 public static class UpdateChecker
 {
-    public const string Repository = "burugou05-wq/PDF_conversion";
+    public const string Repository = "saikusu-piko/PDF_conversion";
     public const string LatestReleaseApiUrl =
         "https://api.github.com/repos/" + Repository + "/releases/latest";
     public const string ReleasesPageUrl = "https://github.com/" + Repository + "/releases";

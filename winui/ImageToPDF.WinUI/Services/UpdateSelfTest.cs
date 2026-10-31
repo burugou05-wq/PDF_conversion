@@ -131,20 +131,20 @@ public static class UpdateSelfTest
             && !UpdateHttp.IsAllowedAssetUrl("not a url"));
         Check("配布URLのパスを検証する", () =>
             UpdateChecker.IsTrustedAssetUrl(
-                "https://github.com/burugou05-wq/PDF_conversion/releases/download/v9.9.9.0/SHA256SUMS.txt",
+                "https://github.com/saikusu-piko/PDF_conversion/releases/download/v9.9.9.0/SHA256SUMS.txt",
                 "v9.9.9.0", "SHA256SUMS.txt")
             && !UpdateChecker.IsTrustedAssetUrl(
                 "https://github.com/attacker/PDF_conversion/releases/download/v9.9.9.0/SHA256SUMS.txt",
                 "v9.9.9.0", "SHA256SUMS.txt")
             && !UpdateChecker.IsTrustedAssetUrl(
-                "https://github.com/burugou05-wq/PDF_conversion/releases/download/v9.9.9.0/SHA256SUMS.txt",
+                "https://github.com/saikusu-piko/PDF_conversion/releases/download/v9.9.9.0/SHA256SUMS.txt",
                 "v9.9.9.0", "ImageToPDF-Setup-v9.9.9.0-Windows-x64.exe"));
         Check("リリースページのURLを検証する", () =>
             UpdateChecker.IsTrustedReleasePageUrl(
-                "https://github.com/burugou05-wq/PDF_conversion/releases/tag/v9.9.9.0")
+                "https://github.com/saikusu-piko/PDF_conversion/releases/tag/v9.9.9.0")
             && !UpdateChecker.IsTrustedReleasePageUrl("https://evil.example.com/")
             && !UpdateChecker.IsTrustedReleasePageUrl(
-                "https://github.com/burugou05-wq/PDF_conversion/releases-evil/"));
+                "https://github.com/saikusu-piko/PDF_conversion/releases-evil/"));
         Check("アセット名を安全な文字に限定する", () =>
             UpdateChecker.IsSafeAssetName("ImageToPDF-Setup-v9.9.9.0-Windows-x64.exe")
             && !UpdateChecker.IsSafeAssetName("../evil.exe")
@@ -400,7 +400,7 @@ public static class UpdateSelfTest
         bool includeSignature = true,
         string host = "github.com")
     {
-        const string repository = "burugou05-wq/PDF_conversion";
+        const string repository = "saikusu-piko/PDF_conversion";
         var installerName = includeInstaller
             ? $"ImageToPDF-Setup-{tag}-Windows-x64.exe"
             : $"ImageToPDF-{tag}-Windows-x64.exe";
@@ -440,7 +440,7 @@ public static class UpdateSelfTest
             ["prerelease"] = prerelease,
             ["published_at"] = "2026-10-18T09:54:20Z",
             ["html_url"] = $"https://github.com/{repository}/releases/tag/{tag}",
-            ["body"] = "テスト用のリリースノートです。\r\n\r\n### 変更点\r\n\r\n- 箇条書きの1行目\r\n- 箇条書きの2行目 https://github.com/burugou05-wq/PDF_conversion\r\n",
+            ["body"] = "テスト用のリリースノートです。\r\n\r\n### 変更点\r\n\r\n- 箇条書きの1行目\r\n- 箇条書きの2行目 https://github.com/saikusu-piko/PDF_conversion\r\n",
             ["assets"] = assets,
         });
     }
