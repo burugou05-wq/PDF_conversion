@@ -23,7 +23,11 @@ public sealed class WorkerOptions
 {
     public string Quality { get; init; } = "original";
 
+    /// <summary>A4 / B5 などの名前、"Custom"、または null（元のサイズ）。</summary>
     public string? PageSize { get; init; }
+
+    /// <summary>PageSize が "Custom" のときの [幅, 高さ] mm。</summary>
+    public IReadOnlyList<double>? CustomPageMm { get; init; }
 
     public double MarginMm { get; init; }
 
@@ -33,6 +37,24 @@ public sealed class WorkerOptions
 
     /// <summary>DPIを持たない画像に使う既定値（1〜10000）。JSON名は defaultDpi。</summary>
     public double DefaultDpi { get; init; } = 96;
+
+    /// <summary>軽量化モードの最大DPI（36〜600）。</summary>
+    public int CompactDpi { get; init; } = 150;
+
+    /// <summary>軽量化モードのJPEG品質（1〜100）。</summary>
+    public int JpegQuality { get; init; } = 85;
+
+    /// <summary>用紙より小さい画像を余白いっぱいに拡大するかどうか。</summary>
+    public bool FitToPage { get; init; }
+
+    /// <summary>用紙上の配置: center / top / top-left。</summary>
+    public string Alignment { get; init; } = "center";
+
+    /// <summary>PDFの文書情報（title / author / subject / keywords）。null なら書きません。</summary>
+    public Dictionary<string, string>? Metadata { get; init; }
+
+    /// <summary>入力ファイルごとにしおりを付けるかどうか。</summary>
+    public bool Outline { get; init; }
 }
 
 public sealed class WorkerMessage
@@ -49,6 +71,9 @@ public sealed class WorkerMessage
     public string OutputPath { get; init; } = string.Empty;
 
     public int PageCount { get; init; }
+
+    /// <summary>completed応答: 保存したPDFのバイト数。</summary>
+    public long OutputSize { get; init; }
 
     public string Data { get; init; } = string.Empty;
 
@@ -73,6 +98,13 @@ public sealed class WorkerMessage
 
     /// <summary>埋め込みICCプロファイルの説明。</summary>
     public string IccProfile { get; init; } = string.Empty;
+
+    /// <summary>inspect応答: 入力がPDFのとき true。FrameCount はページ数になります。</summary>
+    public bool IsPdf { get; init; }
+
+    public double PageWidthMm { get; init; }
+
+    public double PageHeightMm { get; init; }
 }
 
 public sealed class SkippedInput

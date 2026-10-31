@@ -43,6 +43,8 @@ from image_processor import (
     ConversionOptions,
     convert_to_pdf,
     inspect_image,
+    inspect_pdf,
+    is_pdf_input,
     make_thumbnail,
 )
 
@@ -110,13 +112,23 @@ def configure_streams():
 
 def options_from_request(request):
     values = request.get("options", {})
+    page_size = values.get("pageSize")
+    custom_page = values.get("customPageMm")
+    metadata = values.get("metadata")
     return ConversionOptions(
         quality=values.get("quality", "original"),
-        page_size=values.get("pageSize"),
+        page_size=page_size,
         margin_mm=float(values.get("marginMm", 0)),
         bg_color=tuple(values.get("background", [255, 255, 255])),
         auto_rotate=bool(values.get("autoRotate", True)),
         default_dpi=float(values.get("defaultDpi", DEFAULT_DPI)),
+        compact_dpi=int(values.get("compactDpi", 150)),
+        jpeg_quality=int(values.get("jpegQuality", 85)),
+        custom_page_mm=tuple(custom_page) if custom_page else None,
+        fit_to_page=bool(values.get("fitToPage", False)),
+        alignment=values.get("alignment", "center"),
+        metadata=dict(metadata) if metadata else None,
+        outline=bool(values.get("outline", False)),
     )
 
 
@@ -140,6 +152,16 @@ def execute_request(request, cancel_event, emit):
             thumbnail.close()
         return 0
     if operation == "inspect":
+        if is_pdf_input(image_paths[0]):
+            page_count, width_mm, height_mm = inspect_pdf(image_paths[0])
+            emit(
+                "inspect",
+                isPdf=True,
+                frameCount=page_count,
+                pageWidthMm=width_mm,
+                pageHeightMm=height_mm,
+            )
+            return 0
         options = options_from_request(request)
         # 範囲外の既定DPIはエンジンと同じ文言で弾きます（Tkinter版と同じ規則）。
         options.validate()
@@ -175,6 +197,7 @@ def execute_request(request, cancel_event, emit):
         "completed",
         outputPath=str(result.output_path),
         pageCount=result.page_count,
+        outputSize=result.output_size,
         skipped=[
             {"path": str(item.path), "reason": item.reason}
             for item in result.skipped

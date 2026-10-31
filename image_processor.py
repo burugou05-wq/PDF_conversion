@@ -11,13 +11,39 @@ from pathlib import Path
 
 import img2pdf
 from PIL import Image, ImageCms, ImageOps
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
 from pypdf.generic import ArrayObject, DecodedStreamObject, NameObject, NumberObject
 
 from app_config import VERSION
 
 LOGGER = logging.getLogger(__name__)
-PAGE_SIZES_MM = {"A4": (210.0, 297.0), "A3": (297.0, 420.0), "Letter": (215.9, 279.4)}
+# Named paper sizes in millimetres (portrait). "Custom" is resolved from
+# ConversionOptions.custom_page_mm instead of this table.
+PAGE_SIZES_MM = {
+    "A3": (297.0, 420.0),
+    "A4": (210.0, 297.0),
+    "A5": (148.0, 210.0),
+    "B4": (257.0, 364.0),
+    "B5": (182.0, 257.0),
+    "Letter": (215.9, 279.4),
+    "Legal": (215.9, 355.6),
+    "Postcard": (100.0, 148.0),
+    "L": (89.0, 127.0),
+    "2L": (127.0, 178.0),
+}
+CUSTOM_PAGE_SIZE = "Custom"
+MIN_CUSTOM_PAGE_MM = 10.0
+MAX_CUSTOM_PAGE_MM = 5000.0
+ALIGNMENTS = frozenset({"center", "top", "top-left"})
+# Extensions accepted as pre-made PDF pages instead of images.
+PDF_SUFFIXES = frozenset({".pdf"})
+# Metadata keys the caller may set; mapped to the PDF Info dictionary.
+METADATA_KEYS = {
+    "title": "/Title",
+    "author": "/Author",
+    "subject": "/Subject",
+    "keywords": "/Keywords",
+}
 DEFAULT_DPI = 96.0
 MM_TO_PT = 72.0 / 25.4
 # Formats whose compressed data img2pdf can embed into a PDF unchanged.
@@ -68,16 +94,52 @@ class ConversionOptions:
     compact_dpi: int = 150
     jpeg_quality: int = 85
     default_dpi: float = DEFAULT_DPI
+    # Width and height in millimetres when page_size == "Custom".
+    custom_page_mm: tuple | None = None
+    # Enlarge images smaller than the printable area to fill it.
+    fit_to_page: bool = False
+    # Where the image sits on a fixed-size page: center, top, or top-left.
+    alignment: str = "center"
+    # Document information entries (title / author / subject / keywords).
+    metadata: dict | None = None
+    # Add one outline (bookmark) entry per input file.
+    outline: bool = False
+
+    def page_size_mm(self):
+        """Return (width, height) in millimetres for a fixed page, or None."""
+        if self.page_size is None:
+            return None
+        if self.page_size == CUSTOM_PAGE_SIZE:
+            width, height = self.custom_page_mm
+            return float(width), float(height)
+        return PAGE_SIZES_MM[self.page_size]
 
     def validate(self):
         if self.quality not in {"original", "compact"}:
             raise ValueError("画質モードが不正です")
-        if self.page_size is not None and self.page_size not in PAGE_SIZES_MM:
+        if (
+            self.page_size is not None
+            and self.page_size not in PAGE_SIZES_MM
+            and self.page_size != CUSTOM_PAGE_SIZE
+        ):
             raise ValueError("用紙サイズが不正です")
+        if self.page_size == CUSTOM_PAGE_SIZE:
+            self._validate_custom_page()
         if not math.isfinite(self.margin_mm) or not 0 <= self.margin_mm <= 100:
             raise ValueError("余白は0〜100mmで指定してください")
-        if self.page_size and self.margin_mm * 2 >= min(PAGE_SIZES_MM[self.page_size]):
+        page_mm = self.page_size_mm()
+        if page_mm is not None and self.margin_mm * 2 >= min(page_mm):
             raise ValueError("余白が用紙サイズを超えています")
+        if self.alignment not in ALIGNMENTS:
+            raise ValueError("配置が不正です")
+        if self.metadata is not None:
+            if not isinstance(self.metadata, dict):
+                raise ValueError("メタデータが不正です")
+            for key, value in self.metadata.items():
+                if key not in METADATA_KEYS:
+                    raise ValueError(f"メタデータのキーが不正です: {key}")
+                if value is not None and not isinstance(value, str):
+                    raise ValueError(f"メタデータは文字列で指定してください: {key}")
         if len(self.bg_color) != 3 or any(
             not isinstance(value, int) or not 0 <= value <= 255 for value in self.bg_color
         ):
@@ -86,6 +148,19 @@ class ConversionOptions:
             raise ValueError("圧縮設定が不正です")
         if not math.isfinite(self.default_dpi) or not 1 <= self.default_dpi <= 10000:
             raise ValueError("DPI不明時の既定値は1〜10000で指定してください")
+
+    def _validate_custom_page(self):
+        if self.custom_page_mm is None or len(self.custom_page_mm) != 2:
+            raise ValueError("カスタム用紙は幅と高さ(mm)を指定してください")
+        try:
+            values = [float(value) for value in self.custom_page_mm]
+        except (TypeError, ValueError):
+            raise ValueError("カスタム用紙の寸法が不正です") from None
+        for value in values:
+            if not math.isfinite(value) or not MIN_CUSTOM_PAGE_MM <= value <= MAX_CUSTOM_PAGE_MM:
+                raise ValueError(
+                    f"カスタム用紙は{MIN_CUSTOM_PAGE_MM:g}〜{MAX_CUSTOM_PAGE_MM:g}mmで指定してください"
+                )
 
 
 @dataclass(frozen=True)
@@ -120,6 +195,7 @@ class ConversionResult:
     output_path: Path
     page_count: int
     skipped: tuple
+    output_size: int = 0
 
 
 def check_cancel(cancel_event):
@@ -265,20 +341,74 @@ def inspect_image(path, default_dpi=DEFAULT_DPI):
 
 
 def page_geometry(width, height, dpi, options):
-    """Return page and image sizes in points, independently of pixel resolution."""
+    """Return page and image sizes in points, independently of pixel resolution.
+
+    Returns ``(page_width, page_height, image_width, image_height)``. The
+    image is scaled down to fit inside the margins, and scaled up as well when
+    ``options.fit_to_page`` is set. Placement on the page is decided by
+    :func:`image_offset`.
+    """
     horizontal, vertical = normalize_dpi(dpi, options.default_dpi)
     image_width = width * 72.0 / horizontal
     image_height = height * 72.0 / vertical
     margin = options.margin_mm * MM_TO_PT
-    if options.page_size is None:
+    page_mm = options.page_size_mm()
+    if page_mm is None:
         return image_width + margin * 2, image_height + margin * 2, image_width, image_height
-    page_width, page_height = (value * MM_TO_PT for value in PAGE_SIZES_MM[options.page_size])
+    page_width, page_height = (value * MM_TO_PT for value in page_mm)
     if options.auto_rotate and (image_width > image_height) != (page_width > page_height):
         page_width, page_height = page_height, page_width
-    scale = min(
-        1.0, (page_width - margin * 2) / image_width, (page_height - margin * 2) / image_height
-    )
+    scale = min((page_width - margin * 2) / image_width, (page_height - margin * 2) / image_height)
+    if not options.fit_to_page:
+        scale = min(1.0, scale)
     return page_width, page_height, image_width * scale, image_height * scale
+
+
+def image_offset(page_width, page_height, image_width, image_height, options):
+    """Return the (x, y) of the image's lower-left corner in points."""
+    margin = options.margin_mm * MM_TO_PT
+    if options.alignment == "top-left":
+        return margin, page_height - margin - image_height
+    if options.alignment == "top":
+        return (page_width - image_width) / 2, page_height - margin - image_height
+    return (page_width - image_width) / 2, (page_height - image_height) / 2
+
+
+def _apply_alignment(pdf_path, geometry, options):
+    """Move images off centre when the caller asked for top / top-left placement.
+
+    img2pdf always centres the image, so for other alignments each page's
+    content stream is rewritten to draw the single image XObject at the
+    requested position. "Original size" pages have no free space to align in.
+    """
+    if options.alignment == "center" or options.page_size is None:
+        return
+    reader = PdfReader(str(pdf_path))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    for page, layout in zip(writer.pages, geometry):
+        page_width, page_height, image_width, image_height = layout
+        x, y = image_offset(page_width, page_height, image_width, image_height, options)
+        _rewrite_image_matrix(writer, page, image_width, image_height, x, y)
+    with pdf_path.open("wb") as output:
+        writer.write(output)
+
+
+def _rewrite_image_matrix(writer, page, image_width, image_height, x, y):
+    """Replace the page content so its single image draws at (x, y)."""
+    resources = page.get("/Resources")
+    if resources is None:
+        return
+    xobjects = resources.get_object().get("/XObject")
+    if not xobjects:
+        return
+    name = next(iter(xobjects.keys()))
+    content = DecodedStreamObject()
+    content.set_data(
+        f"q {image_width:.4f} 0 0 {image_height:.4f} {x:.4f} {y:.4f} cm {name} Do Q".encode("ascii")
+    )
+    page[NameObject("/Contents")] = writer._add_object(content)
 
 
 def _make_layout_fun(geometry, options):
@@ -603,6 +733,7 @@ def _embed_source_directly(path, source, directory, options, cancel_event):
             outputstream=output,
             **keywords,
         )
+    _apply_alignment(pdf_path, geometry, options)
     return pdf_path
 
 
@@ -659,6 +790,7 @@ def _convert_frames(source, frame_count, directory, options, cancel_event):
         img2pdf.convert(
             embedded, layout_fun=_make_layout_fun(geometry, options), outputstream=output
         )
+    _apply_alignment(pdf_path, geometry, options)
     return pdf_path
 
 
@@ -707,6 +839,44 @@ def _publish_output(staging, output, overwrite):
     _unlink_quietly(staging)
 
 
+def _import_pdf(path, cancel_event):
+    """Validate a ready-made PDF and return the number of pages it contributes."""
+    check_cancel(cancel_event)
+    reader = PdfReader(str(path))
+    if reader.is_encrypted:
+        try:
+            if not reader.decrypt(""):
+                raise ValueError("パスワード付きPDFは結合できません")
+        except ValueError:
+            raise
+        except Exception as error:
+            raise ValueError("パスワード付きPDFは結合できません") from error
+    page_count = len(reader.pages)
+    if page_count == 0:
+        raise ValueError("ページのないPDFです")
+    return page_count
+
+
+def inspect_pdf(path):
+    """Return page count and first-page size (mm) for a PDF input."""
+    reader = PdfReader(str(path))
+    if reader.is_encrypted:
+        reader.decrypt("")
+    page_count = len(reader.pages)
+    if page_count == 0:
+        raise ValueError("ページのないPDFです")
+    box = reader.pages[0].mediabox
+    return page_count, float(box.width) / MM_TO_PT, float(box.height) / MM_TO_PT
+
+
+def is_pdf_input(path):
+    return Path(path).suffix.lower() in PDF_SUFFIXES
+
+
+def _outline_title(path, page_count):
+    return path.name if page_count == 1 else f"{path.name} ({page_count}ページ)"
+
+
 def convert_to_pdf(
     image_paths, output_path, progress_cb=None, *, options=None, cancel_event=None, overwrite=False
 ):
@@ -714,6 +884,9 @@ def convert_to_pdf(
 
     Invalid files are skipped as a whole. Cancellation and resource failures
     abort before publishing output. The PDF merger still retains PDF objects.
+
+    Inputs with a ``.pdf`` suffix are appended page-for-page without
+    re-rendering; everything else is treated as an image.
     """
     options = options or ConversionOptions()
     options.validate()
@@ -739,7 +912,11 @@ def convert_to_pdf(
                 directory = Path(temporary) / str(index)
                 directory.mkdir()
                 try:
-                    pdf_path = _convert_file(path, directory, options, cancel_event)
+                    if is_pdf_input(path):
+                        _import_pdf(path, cancel_event)
+                        pdf_path = path
+                    else:
+                        pdf_path = _convert_file(path, directory, options, cancel_event)
                 except (ConversionCancelled, MemoryError):
                     raise
                 except Exception as error:
@@ -749,7 +926,11 @@ def convert_to_pdf(
                     LOGGER.warning("Skipped %s", path, exc_info=True)
                     skipped.append(SkippedFile(path, str(error) or type(error).__name__))
                 else:
+                    first_page = len(writer.pages)
                     writer.append(str(pdf_path), import_outline=False)
+                    if options.outline:
+                        added = len(writer.pages) - first_page
+                        writer.add_outline_item(_outline_title(path, added), first_page)
                 if progress_cb:
                     progress_cb(round((index + 1) / len(paths) * 90))
             if not writer.pages:
@@ -757,7 +938,12 @@ def convert_to_pdf(
                 raise ValueError("変換できる画像がありません\n" + details)
             check_cancel(cancel_event)
             _tag_unprofiled_rgb_images(writer)
-            writer.add_metadata({"/Producer": f"Image to PDF {VERSION}"})
+            info = {"/Producer": f"Image to PDF {VERSION}"}
+            for key, pdf_key in METADATA_KEYS.items():
+                value = (options.metadata or {}).get(key)
+                if value:
+                    info[pdf_key] = value
+            writer.add_metadata(info)
             descriptor, name = tempfile.mkstemp(
                 prefix=".img2pdf-", suffix=".tmp", dir=output.parent
             )
@@ -769,7 +955,9 @@ def convert_to_pdf(
             check_cancel(cancel_event)
             _publish_output(staging, output, overwrite)
             staging = None
-            result = ConversionResult(output, len(writer.pages), tuple(skipped))
+            result = ConversionResult(
+                output, len(writer.pages), tuple(skipped), output.stat().st_size
+            )
         if progress_cb:
             try:
                 progress_cb(100)

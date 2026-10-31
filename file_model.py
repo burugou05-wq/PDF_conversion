@@ -18,6 +18,8 @@ SUPPORTED_EXTS = frozenset(
         ".gif",
         ".tif",
         ".tiff",
+        # Ready-made PDFs are merged page-for-page by the engine.
+        ".pdf",
     }
 )
 

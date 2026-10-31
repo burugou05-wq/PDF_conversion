@@ -52,8 +52,11 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        var settings = AppSettings.Load();
         var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this));
-        AppWindow.GetFromWindowId(windowId).Resize(new Windows.Graphics.SizeInt32(1320, 860));
+        AppWindow.GetFromWindowId(windowId).Resize(
+            new Windows.Graphics.SizeInt32(settings.WindowWidth, settings.WindowHeight));
+        ApplySettings(settings);
         UpdateListState();
         Closed += (_, _) =>
         {
@@ -61,6 +64,8 @@ public sealed partial class MainWindow : Window
             _closing = true;
             _conversionCancellation?.Cancel();
             _worker.Dispose();
+            CollectSettings();
+            _settings.Save();
             AppLog.Info("アプリを終了しました");
         };
         _settingsReady = true;
@@ -189,10 +194,16 @@ public sealed partial class MainWindow : Window
             var added = ViewModel.AddPaths(paths, GetFolderSortMode());
             if (string.IsNullOrWhiteSpace(OutputPathBox.Text) && ViewModel.Items.Count > 0)
             {
-                OutputPathBox.Text = Path.Combine(ViewModel.Items[0].ParentDirectory, "output.pdf");
+                var directory = Directory.Exists(_settings.LastOutputDirectory)
+                    ? _settings.LastOutputDirectory
+                    : ViewModel.Items[0].ParentDirectory;
+                OutputPathBox.Text = Path.Combine(directory, "output.pdf");
             }
 
-            StatusText.Text = added == 0 ? "追加できる画像がありません" : $"{added} 枚追加しました";
+            var duplicates = ViewModel.LastDuplicateCount;
+            StatusText.Text = added == 0
+                ? (duplicates > 0 ? $"{duplicates} 枚はすでに一覧にあります" : "追加できる画像がありません")
+                : (duplicates > 0 ? $"{added} 枚追加しました（{duplicates} 枚は追加済み）" : $"{added} 枚追加しました");
             AppLog.Info($"画像を追加しました: {added} 枚（一覧 {ViewModel.Items.Count} 枚）");
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
@@ -270,6 +281,7 @@ public sealed partial class MainWindow : Window
             : "検索条件に一致する画像がありません";
         ConvertButton.IsEnabled = ViewModel.Items.Count > 0;
         RemoveButton.IsEnabled = FilesList.SelectedItems.Count > 0;
+        ClearButton.IsEnabled = ViewModel.Items.Count > 0;
         MoveTopButton.IsEnabled = FilesList.SelectedItems.Count > 0;
         MoveUpButton.IsEnabled = FilesList.SelectedItems.Count > 0;
         MoveDownButton.IsEnabled = FilesList.SelectedItems.Count > 0;
@@ -420,6 +432,15 @@ public sealed partial class MainWindow : Window
 
         var selected = selection[0];
         PreviewImage.Source = null;
+        if (selected.IsPdf)
+        {
+            // PDFはプレビュー画像を作らず、ページ数と用紙寸法だけを inspect で表示します。
+            PreviewHint.Text = "PDFはプレビューを表示しません";
+            PreviewHint.Visibility = Visibility.Visible;
+            _ = LoadPreviewDetailsAsync(selected, generation);
+            return;
+        }
+
         PreviewHint.Text = "プレビューを読み込み中…";
         PreviewHint.Visibility = Visibility.Visible;
         // 寸法・DPI・ICCはワーカーの inspect で取得します（プレビュー画像とは別リクエスト）。
@@ -500,7 +521,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            PreviewDetails.Text = FormatDetails(selected, info, dpiError);
+            PreviewDetails.Text = info.IsPdf ? FormatPdfDetails(selected, info) : FormatDetails(selected, info, dpiError);
         }
         catch (Exception error)
         {
@@ -652,16 +673,18 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var pageSize = SelectedTag(PaperBox);
-        var quality = SelectedTag(QualityBox) ?? "original";
-        var backgroundTag = SelectedTag(BackgroundBox) ?? "white";
-        var background = backgroundTag switch
+        var extraError = ValidateExtraInputs();
+        if (extraError is not null)
         {
-            "black" => new[] { 0, 0, 0 },
-            "gray" => new[] { 180, 180, 180 },
-            _ => new[] { 255, 255, 255 },
-        };
-        var backgroundName = backgroundTag switch
+            AppLog.Warning($"設定が範囲外です: {extraError}");
+            await ShowMessageAsync("設定を確認してください", extraError);
+            return;
+        }
+
+        var options = BuildWorkerOptions(defaultDpi);
+        var pageSize = options.PageSize;
+        var quality = options.Quality;
+        var backgroundName = SelectedTag(BackgroundBox) switch
         {
             "black" => "黒",
             "gray" => "グレー",
@@ -672,16 +695,11 @@ public sealed partial class MainWindow : Window
             ImagePaths = ViewModel.Items.Select(item => item.FullPath).ToArray(),
             OutputPath = outputPath,
             Overwrite = overwrite,
-            Options = new WorkerOptions
-            {
-                Quality = quality,
-                PageSize = string.IsNullOrWhiteSpace(pageSize) ? null : pageSize,
-                MarginMm = MarginBox.Value,
-                Background = background,
-                AutoRotate = AutoRotateBox.IsChecked ?? false,
-                DefaultDpi = defaultDpi,
-            },
+            Options = options,
         };
+        // 変換のたびに設定を保存し、クラッシュしても直前の値が残るようにします。
+        CollectSettings();
+        _settings.Save();
 
         var stopwatch = Stopwatch.StartNew();
         AppLog.Info(
@@ -710,7 +728,7 @@ public sealed partial class MainWindow : Window
                 request, progress, _conversionCancellation.Token);
             stopwatch.Stop();
             ConversionProgress.Value = 100;
-            StatusText.Text = $"完了: {result.PageCount} ページを保存しました";
+            StatusText.Text = $"完了: {result.PageCount} ページ / {FormatBytes(result.OutputSize)} を保存しました";
             AppLog.Info(
                 $"変換が完了しました: {result.PageCount} ページ → {result.OutputPath}"
                 + $" ({ElapsedText(stopwatch)}, スキップ {result.Skipped.Count} 件)");
@@ -776,7 +794,16 @@ public sealed partial class MainWindow : Window
         MoveDownButton.IsEnabled = !isBusy && FilesList.SelectedItems.Count > 0;
         MoveBottomButton.IsEnabled = !isBusy && FilesList.SelectedItems.Count > 0;
         RemoveButton.IsEnabled = !isBusy && FilesList.SelectedItems.Count > 0;
+        ClearButton.IsEnabled = !isBusy && ViewModel.Items.Count > 0;
         QualityBox.IsEnabled = !isBusy;
+        CompactDpiBox.IsEnabled = !isBusy;
+        JpegQualityBox.IsEnabled = !isBusy;
+        CustomWidthBox.IsEnabled = !isBusy;
+        CustomHeightBox.IsEnabled = !isBusy;
+        FitToPageBox.IsEnabled = !isBusy;
+        AlignmentBox.IsEnabled = !isBusy;
+        OutlineBox.IsEnabled = !isBusy;
+        MetadataExpander.IsEnabled = !isBusy;
         PaperBox.IsEnabled = !isBusy;
         MarginBox.IsEnabled = !isBusy;
         DpiBox.IsEnabled = !isBusy;
@@ -808,6 +835,11 @@ public sealed partial class MainWindow : Window
 
     private void Root_DragOver(object sender, DragEventArgs e)
     {
+        if (_reordering)
+        {
+            return;
+        }
+
         e.AcceptedOperation = e.DataView.Contains(StandardDataFormats.StorageItems)
             ? DataPackageOperation.Copy
             : DataPackageOperation.None;
@@ -815,8 +847,9 @@ public sealed partial class MainWindow : Window
 
     private async void Root_Drop(object sender, DragEventArgs e)
     {
-        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+        if (_reordering || !e.DataView.Contains(StandardDataFormats.StorageItems))
         {
+            // 一覧内のドラッグ並べ替えは ListView が処理します。
             return;
         }
 

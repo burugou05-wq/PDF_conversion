@@ -17,6 +17,8 @@ public sealed class MainViewModel
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".jpg", ".jpeg", ".png", ".avif", ".heic", ".heif", ".webp", ".bmp", ".gif", ".tif", ".tiff",
+        // 既存のPDFはページをそのまま結合します（エンジン側で判定）。
+        ".pdf",
     };
 
     private static readonly Regex NumericPart = new(@"(\d+)", RegexOptions.Compiled);
@@ -26,6 +28,12 @@ public sealed class MainViewModel
     public ObservableCollection<ImageEntry> VisibleItems { get; } = new();
 
     public IReadOnlyList<ImageEntry> Items => _items;
+
+    /// <summary>直前の AddPaths で、すでに一覧にあったため追加しなかった件数。</summary>
+    public int LastDuplicateCount { get; private set; }
+
+    /// <summary>検索で絞り込み中かどうか。絞り込み中はドラッグ並べ替えを無効にします。</summary>
+    public bool IsFiltered => _searchText.Length > 0;
 
     /// <summary>
     /// 画像ファイルやフォルダーを一覧に追加します。
@@ -39,6 +47,7 @@ public sealed class MainViewModel
             _items.Select(item => item.FullPath),
             StringComparer.OrdinalIgnoreCase);
         var added = 0;
+        LastDuplicateCount = 0;
         var pendingFiles = new List<string>();
 
         void FlushPendingFiles()
@@ -85,8 +94,14 @@ public sealed class MainViewModel
     private bool AddCandidate(string candidate, HashSet<string> knownPaths)
     {
         var fullPath = Path.GetFullPath(candidate);
-        if (!IsSupported(fullPath) || !knownPaths.Add(fullPath))
+        if (!IsSupported(fullPath))
         {
+            return false;
+        }
+
+        if (!knownPaths.Add(fullPath))
+        {
+            LastDuplicateCount++;
             return false;
         }
 
@@ -110,6 +125,48 @@ public sealed class MainViewModel
     public void Clear()
     {
         _items.Clear();
+        Refresh();
+    }
+
+    /// <summary>
+    /// 表示順で <paramref name="moving"/> を <paramref name="target"/> の位置へ動かします
+    /// （ListView のドラッグ並べ替え用）。絞り込み中は表示と全体の順序がずれるため呼びません。
+    /// </summary>
+    public void MoveTo(IReadOnlyList<ImageEntry> moving, int target)
+    {
+        var selection = new HashSet<ImageEntry>(moving);
+        if (selection.Count == 0)
+        {
+            return;
+        }
+
+        var block = _items.Where(selection.Contains).ToList();
+        var remaining = _items.Where(item => !selection.Contains(item)).ToList();
+        target = Math.Clamp(target, 0, remaining.Count);
+        remaining.InsertRange(target, block);
+        _items.Clear();
+        _items.AddRange(remaining);
+        Refresh();
+    }
+
+    /// <summary>基準の項目より上（または下）のファイルをまとめて外します。</summary>
+    public void RemoveRelativeTo(ImageEntry anchor, bool above)
+    {
+        var index = _items.IndexOf(anchor);
+        if (index < 0)
+        {
+            return;
+        }
+
+        if (above)
+        {
+            _items.RemoveRange(0, index);
+        }
+        else if (index + 1 < _items.Count)
+        {
+            _items.RemoveRange(index + 1, _items.Count - index - 1);
+        }
+
         Refresh();
     }
 
