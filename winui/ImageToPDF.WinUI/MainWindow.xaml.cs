@@ -221,9 +221,9 @@ public sealed partial class MainWindow : Window
 
             var duplicates = ViewModel.LastDuplicateCount;
             StatusText.Text = added == 0
-                ? (duplicates > 0 ? $"{duplicates} 枚はすでに一覧にあります" : "追加できる画像がありません")
-                : (duplicates > 0 ? $"{added} 枚追加しました（{duplicates} 枚は追加済み）" : $"{added} 枚追加しました");
-            AppLog.Info($"画像を追加しました: {added} 枚（一覧 {ViewModel.Items.Count} 枚）");
+                ? (duplicates > 0 ? $"{duplicates} 件はすでに一覧にあります" : "追加できるファイルがありません")
+                : (duplicates > 0 ? $"{added} 件追加しました（{duplicates} 件は追加済み）" : $"{added} 件追加しました");
+            AppLog.Info($"ファイルを追加しました: {added} 件（一覧 {ViewModel.Items.Count} 件）");
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
         {
@@ -330,7 +330,7 @@ public sealed partial class MainWindow : Window
         FilesList.ItemTemplate = (DataTemplate)Root.Resources[grid ? TileTemplateKey : RowTemplateKey];
         AppLog.Info(
             $"表示を{(grid ? "グリッド" : "リスト")}に切り替えました"
-            + $"（表示 {ViewModel.VisibleItems.Count} / {ViewModel.Items.Count} 枚）");
+            + $"（表示 {ViewModel.VisibleItems.Count} / {ViewModel.Items.Count} 件）");
     }
 
     private bool IsGridView => GridViewButton.IsChecked == true;
@@ -448,7 +448,7 @@ public sealed partial class MainWindow : Window
             PreviewDetails.Text = string.Empty;
             PreviewHint.Text = selection.Length == 0
                 ? "画像を選択するとプレビューを表示します"
-                : "1枚選択するとプレビューを表示します";
+                : "1件選択するとプレビューを表示します";
             PreviewHint.Visibility = Visibility.Visible;
             return;
         }
@@ -636,7 +636,7 @@ public sealed partial class MainWindow : Window
 
         if (ViewModel.Items.Count == 0)
         {
-            await ShowMessageAsync("画像がありません", "先に画像を追加してください。");
+            await ShowMessageAsync("ファイルがありません", "先に画像やPDFを追加してください。");
             return;
         }
 
@@ -731,7 +731,7 @@ public sealed partial class MainWindow : Window
 
         var stopwatch = Stopwatch.StartNew();
         AppLog.Info(
-            $"変換を開始します: {request.ImagePaths.Count} 枚 → {outputPath}"
+            $"変換を開始します: {request.ImagePaths.Count} 件 → {outputPath}"
             + $" (画質={quality}, 用紙={(string.IsNullOrWhiteSpace(pageSize) ? "元のサイズ" : pageSize)},"
             + $" 余白={MarginBox.Value.ToString("0.##", CultureInfo.InvariantCulture)} mm,"
             + $" 既定DPI={FormatDpi(defaultDpi)}, 背景={backgroundName},"
@@ -785,7 +785,7 @@ public sealed partial class MainWindow : Window
                 }
 
                 await ShowMessageAsync(
-                    "一部の画像をスキップしました",
+                    "一部のファイルをスキップしました",
                     $"{result.PageCount} ページを保存しました。\n\n{skippedSummary}");
             }
 
