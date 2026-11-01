@@ -606,6 +606,11 @@ public sealed partial class MainWindow : Window
 
     private async void ConvertButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_conversionCancellation is not null)
+        {
+            return;
+        }
+
         if (ViewModel.Items.Count == 0)
         {
             await ShowMessageAsync("画像がありません", "先に画像を追加してください。");
@@ -709,13 +714,17 @@ public sealed partial class MainWindow : Window
             + $" 既定DPI={FormatDpi(defaultDpi)}, 背景={backgroundName},"
             + $" 自動回転={(AutoRotateBox.IsChecked == true ? "あり" : "なし")}, 上書き={(overwrite ? "あり" : "なし")})");
 
-        _conversionCancellation = new CancellationTokenSource();
+        var cancellation = new CancellationTokenSource();
+        _conversionCancellation = cancellation;
         SetBusy(true);
         ConversionProgress.Value = 0;
         StatusText.Text = "変換を開始しています…";
         var progress = new Progress<WorkerMessage>(message =>
         {
-            if (message.Type == "progress")
+            if (message.Type == "progress"
+                && ReferenceEquals(_conversionCancellation, cancellation)
+                && !cancellation.IsCancellationRequested
+                && !_closing)
             {
                 ConversionProgress.Value = message.Percent;
                 StatusText.Text = $"変換中… {message.Percent}%";
@@ -725,8 +734,13 @@ public sealed partial class MainWindow : Window
         try
         {
             var result = await _worker.RunAsync(
-                request, progress, _conversionCancellation.Token);
+                request, progress, cancellation.Token);
             stopwatch.Stop();
+            if (_closing)
+            {
+                return;
+            }
+
             ConversionProgress.Value = 100;
             StatusText.Text = $"完了: {result.PageCount} ページ / {FormatBytes(result.OutputSize)} を保存しました";
             AppLog.Info(
@@ -760,25 +774,47 @@ public sealed partial class MainWindow : Window
         catch (OperationCanceledException)
         {
             stopwatch.Stop();
-            StatusText.Text = "変換をキャンセルしました";
+            if (!_closing)
+            {
+                StatusText.Text = "変換をキャンセルしました";
+            }
+
             AppLog.Info($"変換をキャンセルしました: {outputPath} ({ElapsedText(stopwatch)})");
         }
         catch (Exception error)
         {
             stopwatch.Stop();
+            if (_closing)
+            {
+                return;
+            }
+
             StatusText.Text = "変換に失敗しました";
             AppLog.Error($"変換に失敗しました: {outputPath} ({ElapsedText(stopwatch)})", error);
             await ShowMessageAsync("変換に失敗しました", error.Message);
         }
         finally
         {
-            _conversionCancellation.Dispose();
+            cancellation.Dispose();
             _conversionCancellation = null;
-            SetBusy(false);
+            if (!_closing)
+            {
+                SetBusy(false);
+            }
         }
     }
 
-    private void CancelButton_Click(object sender, RoutedEventArgs e) => _conversionCancellation?.Cancel();
+    private void CancelButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_conversionCancellation is null || _conversionCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+
+        CancelButton.IsEnabled = false;
+        StatusText.Text = "キャンセル中… 処理の終了を待っています";
+        _conversionCancellation.Cancel();
+    }
 
     private void SetBusy(bool isBusy)
     {
@@ -835,6 +871,12 @@ public sealed partial class MainWindow : Window
 
     private void Root_DragOver(object sender, DragEventArgs e)
     {
+        if (_conversionCancellation is not null)
+        {
+            e.AcceptedOperation = DataPackageOperation.None;
+            return;
+        }
+
         if (_reordering)
         {
             return;
@@ -847,7 +889,8 @@ public sealed partial class MainWindow : Window
 
     private async void Root_Drop(object sender, DragEventArgs e)
     {
-        if (_reordering || !e.DataView.Contains(StandardDataFormats.StorageItems))
+        if (_conversionCancellation is not null
+            || _reordering || !e.DataView.Contains(StandardDataFormats.StorageItems))
         {
             // 一覧内のドラッグ並べ替えは ListView が処理します。
             return;
