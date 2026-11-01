@@ -1,0 +1,112 @@
+name: Release v2.3.2.1
+
+# One-time release of the already-tested cancellation fix.
+# This does not change ci.yml's tag-only publishing policy.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-v2.3.2.1
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: v2.3.2.1
+  SOURCE_SHA: 2a849b7a89ee82f2c8d3b0e4e992292a10dc3a9c
+  SOURCE_RUN: '41272489191'
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: 2a849b7a89ee82f2c8d3b0e4e992292a10dc3a9c
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - name: Verify the source build and release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "v$(python -c 'from app_config import VERSION; print(VERSION)')" = "$RELEASE_TAG"
+          run="$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN")"
+          test "$(jq -r .head_sha <<< "$run")" = "$SOURCE_SHA"
+          test "$(jq -r .head_branch <<< "$run")" = main
+          test "$(jq -r .event <<< "$run")" = push
+          test "$(jq -r .path <<< "$run")" = .github/workflows/ci.yml
+          test "$(jq -r .status <<< "$run")" = completed
+          test "$(jq -r .conclusion <<< "$run")" = success
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ImageToPDF-WinUI-Release
+          path: release-assets
+          run-id: 41272489191
+          github-token: ${{ github.token }}
+      - name: Validate assets and refuse an existing release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to modify assets" >&2
+            exit 1
+          fi
+          grep -Fxq "# tag: $RELEASE_TAG" release-assets/SHA256SUMS.txt
+          test -f "release-assets/ImageToPDF-Setup-$RELEASE_TAG-Windows-x64.exe"
+          test -f release-assets/LICENSE
+          test -f release-assets/THIRD_PARTY_NOTICES.md
+          (cd release-assets && sha256sum --check SHA256SUMS.txt)
+      - name: Sign and verify checksums with the existing release key
+        env:
+          RELEASE_SIGNING_KEY_B64: ${{ secrets.RELEASE_SIGNING_KEY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_SIGNING_KEY_B64"
+          key="$RUNNER_TEMP/release-p256.key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf '%s' "$RELEASE_SIGNING_KEY_B64" | base64 --decode > "$key")
+          python scripts/release_signing.py check --private-key "$key"
+          python scripts/release_signing.py sign --private-key "$key" --checksums release-assets/SHA256SUMS.txt --output release-assets/SHA256SUMS.txt.sig
+          python scripts/release_signing.py verify --checksums release-assets/SHA256SUMS.txt --signature release-assets/SHA256SUMS.txt.sig
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release-assets/ImageToPDF-Setup-v2.3.2.1-Windows-x64.exe
+            release-assets/SHA256SUMS.txt
+      - name: Create the exact source tag and publish once
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_sha="$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" | cut -f1)"
+          if [[ -n "$tag_sha" ]]; then
+            test "$tag_sha" = "$SOURCE_SHA"
+          else
+            gh api --method POST "repos/$GH_REPO/git/refs" -f ref="refs/tags/$RELEASE_TAG" -f sha="$SOURCE_SHA"
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to modify assets" >&2
+            exit 1
+          fi
+          awk -v heading="## $RELEASE_TAG " 'index($0, heading) == 1 { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+          title="$(grep -m1 "^## $RELEASE_TAG " CHANGELOG.md | sed 's/^## //')"
+          gh release create "$RELEASE_TAG" \
+            "release-assets/ImageToPDF-Setup-$RELEASE_TAG-Windows-x64.exe" \
+            release-assets/SHA256SUMS.txt release-assets/SHA256SUMS.txt.sig \
+            release-assets/LICENSE release-assets/THIRD_PARTY_NOTICES.md \
+            --target "$SOURCE_SHA" --verify-tag --title "$title" --notes-file release-notes.md
