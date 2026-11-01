@@ -21,7 +21,7 @@ public sealed partial class MainWindow : Window
 {
     private static readonly string[] ImageExtensions =
     {
-        ".jpg", ".jpeg", ".png", ".avif", ".heic", ".heif", ".webp", ".bmp", ".gif", ".tif", ".tiff",
+        ".jpg", ".jpeg", ".png", ".avif", ".heic", ".heif", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".pdf",
     };
 
     /// <summary>DPI欄が範囲外のときに使う値（image_processor.DEFAULT_DPI と同じ 96）。</summary>
@@ -46,13 +46,19 @@ public sealed partial class MainWindow : Window
     private int _previewGeneration;
     private bool _settingsReady;
     private bool _closing;
+    private readonly bool _isUiSelfTest;
+    private UpdateDialog? _versionDialog;
 
     public MainViewModel ViewModel { get; } = new();
 
-    public MainWindow()
+    public MainWindow() : this(false) { }
+
+    internal MainWindow(bool uiSelfTest)
     {
+        _isUiSelfTest = uiSelfTest;
         InitializeComponent();
-        var settings = AppSettings.Load();
+        VersionText.Text = $"v{AppLog.ApplicationVersion.Split('+')[0]}";
+        var settings = uiSelfTest ? new AppSettings() : AppSettings.Load();
         var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this));
         AppWindow.GetFromWindowId(windowId).Resize(
             new Windows.Graphics.SizeInt32(settings.WindowWidth, settings.WindowHeight));
@@ -65,13 +71,16 @@ public sealed partial class MainWindow : Window
             _closing = true;
             _conversionCancellation?.Cancel();
             _worker.Dispose();
-            CollectSettings();
-            _settings.Save();
+            if (!_isUiSelfTest)
+            {
+                CollectSettings();
+                _settings.Save();
+            }
             AppLog.Info("アプリを終了しました");
         };
         _settingsReady = true;
         // 起動時の更新確認は画面の表示を待たせません（結果だけバッジに反映します）。
-        _ = CheckForUpdatesAutomaticallyAsync();
+        if (!uiSelfTest) _ = CheckForUpdatesAutomaticallyAsync();
     }
 
     /// <summary>
@@ -80,10 +89,19 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private async void VersionButton_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new UpdateDialog(_updateCheck) { XamlRoot = Root.XamlRoot };
-        await dialog.ShowAsync();
-        // ダイアログ内で再確認した結果をバッジへ反映します。
-        ApplyUpdateIndicator(dialog.Result);
+        if (_versionDialog is not null) return;
+        var check = _isUiSelfTest ? new UpdateCheckResult(null, DateTimeOffset.UtcNow, null) : _updateCheck;
+        var dialog = new UpdateDialog(check) { XamlRoot = Root.XamlRoot };
+        _versionDialog = dialog;
+        try
+        {
+            await dialog.ShowAsync();
+            ApplyUpdateIndicator(dialog.Result);
+        }
+        finally
+        {
+            _versionDialog = null;
+        }
     }
 
     /// <summary>起動時に一度だけ最新リリースを確認します（6時間キャッシュ）。</summary>
@@ -127,10 +145,10 @@ public sealed partial class MainWindow : Window
         {
             UpdateBadge.Visibility = Visibility.Visible;
             ToolTipService.SetToolTip(
-                VersionButton, $"新しいバージョン v{release.TagName} があります。タップして更新できます");
+                VersionButton, $"新しいバージョン {release.TagName} があります。タップして更新できます");
             AutomationProperties.SetName(
-                VersionButton, $"新しいバージョン v{release.TagName} があります。タップして更新できます");
-            AppLog.Info($"新しいバージョンがあります: v{release.TagName}（現在 v{AppLog.ApplicationVersion}）");
+                VersionButton, $"新しいバージョン {release.TagName} があります。タップして更新できます");
+            AppLog.Info($"新しいバージョンがあります: {release.TagName}（現在 v{AppLog.ApplicationVersion}）");
             return;
         }
 
@@ -274,19 +292,23 @@ public sealed partial class MainWindow : Window
     private void UpdateListState()
     {
         CountText.Text = ViewModel.VisibleItems.Count == ViewModel.Items.Count
-            ? $"{ViewModel.Items.Count} 枚"
-            : $"{ViewModel.VisibleItems.Count} / {ViewModel.Items.Count} 枚";
+            ? $"{ViewModel.Items.Count} 件"
+            : $"{ViewModel.VisibleItems.Count} / {ViewModel.Items.Count} 件";
         EmptyState.Visibility = ViewModel.VisibleItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         EmptyStateText.Text = ViewModel.Items.Count == 0
-            ? "画像を追加するか、ここへドラッグしてください"
-            : "検索条件に一致する画像がありません";
-        ConvertButton.IsEnabled = ViewModel.Items.Count > 0;
-        RemoveButton.IsEnabled = FilesList.SelectedItems.Count > 0;
-        ClearButton.IsEnabled = ViewModel.Items.Count > 0;
-        MoveTopButton.IsEnabled = FilesList.SelectedItems.Count > 0;
-        MoveUpButton.IsEnabled = FilesList.SelectedItems.Count > 0;
-        MoveDownButton.IsEnabled = FilesList.SelectedItems.Count > 0;
-        MoveBottomButton.IsEnabled = FilesList.SelectedItems.Count > 0;
+            ? "画像やPDFを追加するか、ここへドラッグしてください"
+            : "検索条件に一致するファイルがありません";
+        var pdfs = ViewModel.Items.Count(item => item.IsPdf);
+        PdfInputNoticeText.Text = $"PDF {pdfs} 件のページは、用紙・画質・配置を変更せず結合します。";
+        PdfInputNoticeText.Visibility = pdfs > 0 ? Visibility.Visible : Visibility.Collapsed;
+        var available = _conversionCancellation is null;
+        ConvertButton.IsEnabled = available && ViewModel.Items.Count > 0;
+        RemoveButton.IsEnabled = available && FilesList.SelectedItems.Count > 0;
+        ClearButton.IsEnabled = available && ViewModel.Items.Count > 0;
+        MoveTopButton.IsEnabled = available && FilesList.SelectedItems.Count > 0;
+        MoveUpButton.IsEnabled = available && FilesList.SelectedItems.Count > 0;
+        MoveDownButton.IsEnabled = available && FilesList.SelectedItems.Count > 0;
+        MoveBottomButton.IsEnabled = available && FilesList.SelectedItems.Count > 0;
     }
 
     private void RestoreSelection(IEnumerable<ImageEntry> selected)
@@ -820,6 +842,10 @@ public sealed partial class MainWindow : Window
     private void SetBusy(bool isBusy)
     {
         UpdatePresetButtons();
+        PresetManageButton.IsEnabled = !isBusy;
+        BrowseOutputButton.IsEnabled = !isBusy;
+        FileOptionsButton.IsEnabled = !isBusy;
+        VersionButton.IsEnabled = !isBusy;
         AddFilesButton.IsEnabled = !isBusy;
         AddFolderButton.IsEnabled = !isBusy;
         SearchBox.IsEnabled = !isBusy;

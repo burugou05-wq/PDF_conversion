@@ -80,7 +80,7 @@ public sealed partial class UpdateDialog : ContentDialog
     private void Apply(UpdateCheckResult? check)
     {
         _check = check;
-        CurrentVersionText.Text = $"現在のバージョン: v{AppLog.ApplicationVersion}";
+        CurrentVersionText.Text = $"現在のバージョン: v{AppLog.ApplicationVersion.Split('+')[0]}";
         StatusText.Text = BuildStatusText(check);
         NotesText.Blocks.Clear();
 
@@ -88,7 +88,7 @@ public sealed partial class UpdateDialog : ContentDialog
         {
             // 署名付きチェックサムが揃わないリリースは自動更新できません。
             _canAutoUpdate = release.ChecksumsUrl is not null && release.SignatureUrl is not null;
-            VersionSummaryText.Text = $"新しいバージョン v{release.TagName} があります";
+            VersionSummaryText.Text = $"新しいバージョン {release.TagName} があります";
             ReleaseInfoText.Text = string.Join(Environment.NewLine, DescribeRelease(release));
             NotesExpander.Visibility = Visibility.Visible;
             NotesExpander.IsExpanded = true;

@@ -20,6 +20,17 @@ public partial class App : Application
     {
         AppLog.Initialize();
         var commandLine = Environment.GetCommandLineArgs();
+        if (commandLine.Length == 3 && commandLine[1] == "--selftest-ui")
+        {
+            var window = new MainWindow(uiSelfTest: true);
+            _window = window;
+            window.Activate();
+            var uiExitCode = await window.RunUiSelfTestAsync(commandLine[2]);
+            window.Close();
+            Environment.Exit(uiExitCode);
+            return;
+        }
+
         if (commandLine.Length == 3 && commandLine[1] == UpdateSelfTest.Flag)
         {
             // アップデート機能の自己診断（ネットワークには接続しません）。

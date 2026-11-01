@@ -15,7 +15,7 @@ public sealed partial class MainWindow
     {
         try
         {
-            _presets.Load();
+            if (!_isUiSelfTest) _presets.Load();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -48,6 +48,7 @@ public sealed partial class MainWindow
         var available = _conversionCancellation is null;
         var custom = PresetBox.SelectedItem is ConversionPreset { IsBuiltIn: false };
         PresetBox.IsEnabled = available;
+        PresetManageButton.IsEnabled = available;
         SavePresetButton.IsEnabled = available;
         OverwritePresetButton.IsEnabled = available && custom;
         DeletePresetButton.IsEnabled = available && custom;
@@ -60,7 +61,7 @@ public sealed partial class MainWindow
         if (PresetBox.SelectedItem is not ConversionPreset preset) return;
         preset.Options.ApplyTo(_settings);
         ApplyConversionSettings(_settings);
-        _settings.Save();
+        if (!_isUiSelfTest) _settings.Save();
         PresetStatusText.Text = $"「{preset.Name}」を適用しました。各設定は変更できます。";
     }
 

@@ -279,6 +279,36 @@ function Test-UpdateSelfCheck {
     Write-Host "Update self-check passed: $LogPath"
 }
 
+function Test-UiSelfCheck {
+    param(
+        [Parameter(Mandatory)][string]$ExecutablePath,
+        [Parameter(Mandatory)][string]$WorkingDirectory
+    )
+    $ReportPath = Join-Path $WorkingDirectory "画面自己診断.txt"
+    $env:IMAGETOPDF_APP_LOG = Join-Path $WorkingDirectory "画面自己診断.log"
+    $Process = $null
+    try {
+        $Process = Start-Process -FilePath $ExecutablePath `
+            -ArgumentList @("--selftest-ui", "`"$ReportPath`"") `
+            -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
+        if (-not $Process.WaitForExit(60000)) {
+            $Process.Kill($true)
+            throw "UI self-check timed out."
+        }
+        $Report = if (Test-Path -LiteralPath $ReportPath) {
+            [System.IO.File]::ReadAllText($ReportPath)
+        } else { "UI self-check did not create a report." }
+        if ($Process.ExitCode -ne 0 -or $Report -notlike "*ui selftest ok*") {
+            throw "UI self-check failed (exit code $($Process.ExitCode)).`n$Report"
+        }
+        Write-Host "Two-pane layout and version-button self-check passed: $ReportPath"
+    }
+    finally {
+        Remove-Item Env:\IMAGETOPDF_APP_LOG -ErrorAction SilentlyContinue
+        if ($null -ne $Process) { $Process.Dispose() }
+    }
+}
+
 function Get-WinUiCrashContext {
     param(
         [Parameter(Mandatory)][string]$ExecutablePath,
@@ -327,7 +357,7 @@ function Test-WinUiStartup {
     $Process = $null
     $StartupStartedAt = Get-Date
     try {
-        $Process = Start-Process -FilePath $ExecutablePath -WorkingDirectory $WorkingDirectory -PassThru
+        $Process = Start-Process -FilePath $ExecutablePath -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
         if (-not $Process.WaitForInputIdle(20000)) {
             throw "WinUI process did not reach its message loop within 20 seconds."
         }
@@ -412,6 +442,14 @@ try {
     $MainWindowXaml = [System.IO.File]::ReadAllText((Join-Path $RepoRoot "winui\ImageToPDF.WinUI\MainWindow.xaml"))
     if (-not $MainWindowXaml.Contains("Text=`"v$Version`"")) {
         throw "winui/ImageToPDF.WinUI/MainWindow.xaml does not show version v$Version."
+    }
+    $ProjectContent = [System.IO.File]::ReadAllText($Project)
+    if (-not $ProjectContent.Contains(">$Version</Version>")) {
+        throw "The WinUI project version does not match $Version."
+    }
+    $InstallerContent = [System.IO.File]::ReadAllText((Join-Path $RepoRoot "installer\ImageToPDF.iss"))
+    if (-not $InstallerContent.Contains(('#define AppVersion "' + $Version + '"'))) {
+        throw "The installer version does not match $Version."
     }
 
     & python -m PyInstaller --noconfirm --clean `
@@ -550,6 +588,7 @@ try {
 
         Test-SingleExeConversion -ExecutablePath $InstalledExecutable -WorkingDirectory $VerificationDirectory
         Test-UpdateSelfCheck -ExecutablePath $InstalledExecutable -WorkingDirectory $VerificationDirectory
+        Test-UiSelfCheck -ExecutablePath $InstalledExecutable -WorkingDirectory $VerificationDirectory
         Test-WinUiStartup -ExecutablePath $InstalledExecutable -WorkingDirectory $VerificationDirectory
     }
     finally {
