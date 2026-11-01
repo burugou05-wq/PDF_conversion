@@ -147,7 +147,7 @@
                 AutomationProperties.Name="バージョン情報とアップデートを確認します">
                 <Grid>
                     <TextBlock
-                        Text="v2.3.2.1"
+                        Text="v2.3.2.2"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <Ellipse
                         x:Name="UpdateBadge"
@@ -338,6 +338,25 @@
                             LineHeight="17"
                             TextWrapping="Wrap"
                             IsTextSelectionEnabled="True"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                        <TextBlock Text="設定プリセット" FontWeight="SemiBold" />
+                        <ComboBox
+                            x:Name="PresetBox"
+                            PlaceholderText="選ぶと変換設定を適用します"
+                            DisplayMemberPath="DisplayName"
+                            HorizontalAlignment="Stretch"
+                            SelectionChanged="PresetBox_SelectionChanged" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="SavePresetButton" Content="名前を付けて保存" Click="SavePresetButton_Click" />
+                            <Button x:Name="OverwritePresetButton" Content="上書き" IsEnabled="False" Click="OverwritePresetButton_Click" />
+                            <Button x:Name="DeletePresetButton" Content="削除" IsEnabled="False" Click="DeletePresetButton_Click" />
+                        </StackPanel>
+                        <TextBlock
+                            x:Name="PresetStatusText"
+                            Text="画質・用紙・配置などを保存できます。保存先・文書情報は含みません。"
+                            FontSize="12"
+                            TextWrapping="Wrap"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
                         <TextBlock Text="画質" FontWeight="SemiBold" />

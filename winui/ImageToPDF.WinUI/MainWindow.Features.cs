@@ -26,6 +26,17 @@ public sealed partial class MainWindow
     private void ApplySettings(AppSettings settings)
     {
         _settings = settings;
+        ApplyConversionSettings(settings);
+        AuthorBox.Text = settings.MetadataAuthor;
+        FolderSortBox.SelectedIndex = settings.FolderSortIndex;
+        if (settings.GridView)
+        {
+            ViewModeButton_Click(GridViewButton, new RoutedEventArgs());
+        }
+    }
+
+    private void ApplyConversionSettings(AppSettings settings)
+    {
         SelectByTag(QualityBox, settings.Quality);
         SelectByTag(PaperBox, settings.PageSize);
         CustomWidthBox.Value = settings.CustomPageWidthMm;
@@ -40,33 +51,13 @@ public sealed partial class MainWindow
         OutlineBox.IsChecked = settings.Outline;
         CompactDpiBox.Value = settings.CompactDpi;
         JpegQualityBox.Value = settings.JpegQuality;
-        AuthorBox.Text = settings.MetadataAuthor;
-        FolderSortBox.SelectedIndex = settings.FolderSortIndex;
-        if (settings.GridView)
-        {
-            ViewModeButton_Click(GridViewButton, new RoutedEventArgs());
-        }
-
         UpdateQualityPanels();
         UpdatePagePanels();
     }
 
     private void CollectSettings()
     {
-        _settings.Quality = SelectedTag(QualityBox) ?? "original";
-        _settings.PageSize = SelectedTag(PaperBox) ?? string.Empty;
-        _settings.CustomPageWidthMm = CustomWidthBox.Value;
-        _settings.CustomPageHeightMm = CustomHeightBox.Value;
-        _settings.MarginMm = MarginBox.Value;
-        _settings.DefaultDpi = DpiBox.Value;
-        _settings.Background = SelectedTag(BackgroundBox) ?? "white";
-        _settings.AutoRotate = AutoRotateBox.IsChecked == true;
-        _settings.FitToPage = FitToPageBox.IsChecked == true;
-        _settings.Alignment = SelectedTag(AlignmentBox) ?? "center";
-        _settings.OpenAfter = OpenAfterBox.IsChecked == true;
-        _settings.Outline = OutlineBox.IsChecked == true;
-        _settings.CompactDpi = (int)Math.Round(CompactDpiBox.Value);
-        _settings.JpegQuality = (int)Math.Round(JpegQualityBox.Value);
+        CollectConversionSettings(_settings);
         _settings.MetadataAuthor = AuthorBox.Text;
         _settings.FolderSortIndex = FolderSortBox.SelectedIndex;
         _settings.GridView = IsGridView;
@@ -85,6 +76,24 @@ public sealed partial class MainWindow
         {
             // ウィンドウが既に閉じていれば前回の値を保ちます。
         }
+    }
+
+    private void CollectConversionSettings(AppSettings settings)
+    {
+        settings.Quality = SelectedTag(QualityBox) ?? "original";
+        settings.PageSize = SelectedTag(PaperBox) ?? string.Empty;
+        settings.CustomPageWidthMm = CustomWidthBox.Value;
+        settings.CustomPageHeightMm = CustomHeightBox.Value;
+        settings.MarginMm = MarginBox.Value;
+        settings.DefaultDpi = DpiBox.Value;
+        settings.Background = SelectedTag(BackgroundBox) ?? "white";
+        settings.AutoRotate = AutoRotateBox.IsChecked == true;
+        settings.FitToPage = FitToPageBox.IsChecked == true;
+        settings.Alignment = SelectedTag(AlignmentBox) ?? "center";
+        settings.OpenAfter = OpenAfterBox.IsChecked == true;
+        settings.Outline = OutlineBox.IsChecked == true;
+        settings.CompactDpi = (int)Math.Round(CompactDpiBox.Value);
+        settings.JpegQuality = (int)Math.Round(JpegQualityBox.Value);
     }
 
     private static void SelectByTag(ComboBox comboBox, string? tag)

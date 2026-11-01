@@ -57,6 +57,7 @@ public sealed partial class MainWindow : Window
         AppWindow.GetFromWindowId(windowId).Resize(
             new Windows.Graphics.SizeInt32(settings.WindowWidth, settings.WindowHeight));
         ApplySettings(settings);
+        InitializePresets();
         UpdateListState();
         Closed += (_, _) =>
         {
@@ -818,6 +819,7 @@ public sealed partial class MainWindow : Window
 
     private void SetBusy(bool isBusy)
     {
+        UpdatePresetButtons();
         AddFilesButton.IsEnabled = !isBusy;
         AddFolderButton.IsEnabled = !isBusy;
         SearchBox.IsEnabled = !isBusy;
