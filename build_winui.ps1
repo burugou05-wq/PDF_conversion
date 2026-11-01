@@ -400,6 +400,9 @@ try {
     & python -m ruff check .
     if ($LASTEXITCODE -ne 0) { throw "Ruff checks failed (exit code $LASTEXITCODE)." }
 
+    & dotnet run --project (Join-Path $RepoRoot "tests\WorkerCancellation.Tests\WorkerCancellation.Tests.csproj") --configuration Release
+    if ($LASTEXITCODE -ne 0) { throw "Worker cancellation tests failed (exit code $LASTEXITCODE)." }
+
     $Version = & python -c "from app_config import VERSION; print(VERSION)"
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Version)) { throw "Could not read the application version." }
     $Version = $Version.Trim()
