@@ -54,18 +54,21 @@ public sealed class ConversionWorkerService : IDisposable
 
         try
         {
-            using var cancellationRegistration = cancellationToken.Register(() =>
-                TryWriteLine("{\"type\":\"cancel\",\"id\":\"" + requestId + "\"}"));
-            TryWriteLine(SerializeRequest(request, requestId));
-            // If the worker died between its startup and this write (for
-            // example during self-extraction), the pipe write can silently
-            // buffer; fail fast instead of waiting for a response forever.
-            if (worker.HasExited)
-            {
-                throw new InvalidOperationException("変換ワーカーが起動直後に終了しました。");
-            }
-
-            return await completion.Task.WaitAsync(cancellationToken);
+            return await WorkerRequestLifetime.SendAndWaitAsync(
+                completion.Task,
+                sendRequest: () =>
+                {
+                    TryWriteLine(SerializeRequest(request, requestId));
+                    // If the worker died during startup or this write, do not
+                    // wait for a response that can no longer arrive.
+                    if (worker.HasExited)
+                    {
+                        throw new InvalidOperationException("変換ワーカーが起動直後に終了しました。");
+                    }
+                },
+                sendCancellation: () =>
+                    TryWriteLine("{\"type\":\"cancel\",\"id\":\"" + requestId + "\"}"),
+                cancellationToken: cancellationToken);
         }
         finally
         {
