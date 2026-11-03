@@ -8,7 +8,7 @@ packaging==26.3
 pefile==2023.2.7
 pikepdf==10.13.0.post1
 pillow==11.1.0
-pillow-avif-plugin==1.5.0
+pillow-avif-plugin==1.6.0
 pillow_heif==1.8.1
 pluggy==1.6.0
 pyinstaller==6.12.0
