@@ -28,7 +28,7 @@ public sealed partial class MainWindow
             await WaitForUiAsync(() => Root.IsLoaded, "Window did not load.");
             var version = "v" + AppLog.ApplicationVersion.Split('+')[0];
             Check(VersionText.Text == version, "Visible version matches the release assembly.");
-            Check(ImageExtensions.Contains(".pdf"), "The file picker accepts PDF inputs.");
+            Check(ViewModels.MainViewModel.SupportedExtensions.Contains(".pdf"), "The file picker accepts PDF inputs.");
 
             PresetBox.SelectedIndex = 2;
             await LayoutSettledAsync();
