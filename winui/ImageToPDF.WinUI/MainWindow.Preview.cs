@@ -13,6 +13,16 @@ public sealed partial class MainWindow
 {
     private bool IsGridView => GridViewButton.IsChecked == true;
 
+    /// <summary>右ペインの「変換設定」と「プレビュー &amp; 情報」タブを切り替えます。</summary>
+    private void InspectorTabButton_Click(object sender, RoutedEventArgs e)
+    {
+        var showPreview = ReferenceEquals(sender, PreviewTabButton);
+        SettingsTabButton.IsChecked = !showPreview;
+        PreviewTabButton.IsChecked = showPreview;
+        SettingsScroll.Visibility = showPreview ? Visibility.Collapsed : Visibility.Visible;
+        PreviewPanel.Visibility = showPreview ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     /// <summary>
     /// タイルが画面に実現されたときにサムネイルを要求します。Tkinter版のページ単位の
     /// 描画の代わりに、WinUIの仮想化に合わせて必要な分だけ取得します。

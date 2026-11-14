@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.IO;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace ImageToPDF.WinUI.Models;
@@ -35,6 +36,9 @@ public sealed class ImageEntry : INotifyPropertyChanged
 
     /// <summary>一覧のアイコン。画像はピクチャ、PDFは文書のグリフです。</summary>
     public string IconGlyph => IsPdf ? "\uE8A5" : "\uE8B9";
+
+    /// <summary>PDF 入力のときだけ一覧に PDF バッジを表示します。</summary>
+    public Visibility PdfBadgeVisibility => IsPdf ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>
     /// グリッドのタイルに表示するサムネイル。未取得、またはLRUで追い出されたときは

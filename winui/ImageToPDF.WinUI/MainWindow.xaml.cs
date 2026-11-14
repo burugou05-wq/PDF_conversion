@@ -568,6 +568,7 @@ public sealed partial class MainWindow : Window
         OutputPathBox.IsEnabled = !isBusy;
         ConvertButton.IsEnabled = !isBusy && ViewModel.Items.Count > 0;
         CancelButton.IsEnabled = isBusy;
+        ProgressRow.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async Task ShowMessageAsync(string title, string content)
