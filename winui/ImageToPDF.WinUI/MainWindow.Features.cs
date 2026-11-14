@@ -186,7 +186,8 @@ public sealed partial class MainWindow
     /// <summary>用紙・軽量化の数値欄を変換前に検査します。問題があれば文言を返します。</summary>
     private string? ValidateExtraInputs()
     {
-        if (SelectedTag(PaperBox) == "Custom")
+        var pageSize = SelectedTag(PaperBox) ?? string.Empty;
+        if (pageSize == "Custom")
         {
             foreach (var value in new[] { CustomWidthBox.Value, CustomHeightBox.Value })
             {
@@ -195,11 +196,15 @@ public sealed partial class MainWindow
                     return "カスタム用紙は10〜5000 mmの範囲で指定してください。";
                 }
             }
+        }
 
-            if (MarginBox.Value * 2 >= Math.Min(CustomWidthBox.Value, CustomHeightBox.Value))
-            {
-                return "余白がカスタム用紙のサイズを超えています。";
-            }
+        var minimumSide = ConversionPresetOptions.MinimumPaperSideMm(
+            pageSize, CustomWidthBox.Value, CustomHeightBox.Value);
+        if (MarginBox.Value * 2 >= minimumSide)
+        {
+            return pageSize == "Custom"
+                ? "余白がカスタム用紙のサイズを超えています。"
+                : "余白が用紙サイズを超えています。";
         }
 
         if (SelectedTag(QualityBox) == "compact")
@@ -405,19 +410,6 @@ public sealed partial class MainWindow
         ViewModel.MoveTo(moved, targetIndex);
         RestoreSelection(moved);
         UpdateListState();
-    }
-
-    // ---------------------------------------------------------------- 画像情報（PDF入力）
-
-    private static string FormatPdfDetails(ImageEntry selected, WorkerMessage info)
-    {
-        return string.Join(
-            Environment.NewLine,
-            selected.Name,
-            $"PDF: {info.FrameCount} ページ",
-            $"用紙: {info.PageWidthMm.ToString("0.0", CultureInfo.InvariantCulture)}"
-                + $" × {info.PageHeightMm.ToString("0.0", CultureInfo.InvariantCulture)} mm",
-            "ページをそのまま結合します（用紙・画質の設定は適用されません）");
     }
 
     internal bool IsReordering => _reordering;

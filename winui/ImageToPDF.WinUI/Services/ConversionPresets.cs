@@ -66,12 +66,7 @@ public sealed record ConversionPresetOptions
             or "Legal" or "Postcard" or "L" or "2L" or "Custom" ? PageSize : string.Empty;
         var width = Valid(CustomPageWidthMm, 10, 5000, 100);
         var height = Valid(CustomPageHeightMm, 10, 5000, 148);
-        var minimumSide = page switch
-        {
-            "A3" => 297, "A4" => 210, "A5" => 148, "B4" => 257, "B5" => 182,
-            "Letter" or "Legal" => 215.9, "Postcard" => 100, "L" => 89, "2L" => 127,
-            "Custom" => Math.Min(width, height), _ => double.PositiveInfinity,
-        };
+        var minimumSide = MinimumPaperSideMm(page, width, height);
         var margin = Valid(MarginMm, 0, 100, 0);
         return this with
         {
@@ -87,6 +82,22 @@ public sealed record ConversionPresetOptions
             JpegQuality = JpegQuality is >= 1 and <= 100 ? JpegQuality : 85,
         };
     }
+
+    public static double MinimumPaperSideMm(string pageSize, double customWidthMm, double customHeightMm) =>
+        pageSize switch
+        {
+            "A3" => 297,
+            "A4" => 210,
+            "A5" => 148,
+            "B4" => 257,
+            "B5" => 182,
+            "Letter" or "Legal" => 215.9,
+            "Postcard" => 100,
+            "L" => 89,
+            "2L" => 127,
+            "Custom" => Math.Min(customWidthMm, customHeightMm),
+            _ => double.PositiveInfinity,
+        };
 
     private static double Valid(double value, double minimum, double maximum, double fallback) =>
         double.IsFinite(value) && value >= minimum && value <= maximum ? value : fallback;

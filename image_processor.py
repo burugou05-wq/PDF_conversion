@@ -839,9 +839,8 @@ def _publish_output(staging, output, overwrite):
     _unlink_quietly(staging)
 
 
-def _import_pdf(path, cancel_event):
-    """Validate a ready-made PDF and return the number of pages it contributes."""
-    check_cancel(cancel_event)
+def _open_pdf_reader(path):
+    """Open a PDF and validate that it is readable without a password and has pages."""
     reader = PdfReader(str(path))
     if reader.is_encrypted:
         try:
@@ -851,22 +850,22 @@ def _import_pdf(path, cancel_event):
             raise
         except Exception as error:
             raise ValueError("パスワード付きPDFは結合できません") from error
-    page_count = len(reader.pages)
-    if page_count == 0:
+    if len(reader.pages) == 0:
         raise ValueError("ページのないPDFです")
-    return page_count
+    return reader
+
+
+def _import_pdf(path, cancel_event):
+    """Validate a ready-made PDF and return the number of pages it contributes."""
+    check_cancel(cancel_event)
+    return len(_open_pdf_reader(path).pages)
 
 
 def inspect_pdf(path):
     """Return page count and first-page size (mm) for a PDF input."""
-    reader = PdfReader(str(path))
-    if reader.is_encrypted:
-        reader.decrypt("")
-    page_count = len(reader.pages)
-    if page_count == 0:
-        raise ValueError("ページのないPDFです")
+    reader = _open_pdf_reader(path)
     box = reader.pages[0].mediabox
-    return page_count, float(box.width) / MM_TO_PT, float(box.height) / MM_TO_PT
+    return len(reader.pages), float(box.width) / MM_TO_PT, float(box.height) / MM_TO_PT
 
 
 def is_pdf_input(path):

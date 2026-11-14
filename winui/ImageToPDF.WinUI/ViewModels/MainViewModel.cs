@@ -14,7 +14,7 @@ public enum FolderSortMode
 
 public sealed class MainViewModel
 {
-    private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    public static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".jpg", ".jpeg", ".png", ".avif", ".heic", ".heif", ".webp", ".bmp", ".gif", ".tif", ".tiff",
         // 既存のPDFはページをそのまま結合します（エンジン側で判定）。

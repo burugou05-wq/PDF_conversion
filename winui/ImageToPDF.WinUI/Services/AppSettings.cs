@@ -104,50 +104,11 @@ public sealed class AppSettings
     /// <summary>範囲外・未知の値を既定値に戻します。ワーカー側の検証と同じ範囲です。</summary>
     private void Sanitize()
     {
-        if (Quality is not ("original" or "compact"))
-        {
-            Quality = "original";
-        }
-
-        if (!double.IsFinite(CustomPageWidthMm) || CustomPageWidthMm < 10 || CustomPageWidthMm > 5000)
-        {
-            CustomPageWidthMm = 100;
-        }
-
-        if (!double.IsFinite(CustomPageHeightMm) || CustomPageHeightMm < 10 || CustomPageHeightMm > 5000)
-        {
-            CustomPageHeightMm = 148;
-        }
-
-        if (!double.IsFinite(MarginMm) || MarginMm < 0 || MarginMm > 100)
-        {
-            MarginMm = 0;
-        }
-
-        if (!double.IsFinite(DefaultDpi) || DefaultDpi < 1 || DefaultDpi > 10000)
-        {
-            DefaultDpi = 96;
-        }
-
-        if (Background is not ("white" or "black" or "gray"))
-        {
-            Background = "white";
-        }
-
-        if (Alignment is not ("center" or "top" or "top-left"))
-        {
-            Alignment = "center";
-        }
-
-        if (CompactDpi < 36 || CompactDpi > 600)
-        {
-            CompactDpi = 150;
-        }
-
-        if (JpegQuality < 1 || JpegQuality > 100)
-        {
-            JpegQuality = 85;
-        }
+        PageSize ??= string.Empty;
+        Quality ??= string.Empty;
+        Background ??= string.Empty;
+        Alignment ??= string.Empty;
+        ConversionPresetOptions.FromSettings(this).Normalize().ApplyTo(this);
 
         if (FolderSortIndex is < 0 or > 2)
         {
@@ -166,6 +127,5 @@ public sealed class AppSettings
 
         MetadataAuthor ??= string.Empty;
         LastOutputDirectory ??= string.Empty;
-        PageSize ??= string.Empty;
     }
 }

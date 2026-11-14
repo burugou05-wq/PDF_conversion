@@ -74,7 +74,7 @@
           </StackPanel>
           <Button x:Name="VersionButton" Padding="10,4" VerticalAlignment="Center" Background="Transparent" BorderThickness="0" Click="VersionButton_Click" ToolTipService.ToolTip="バージョン情報とアップデートを確認します" AutomationProperties.Name="バージョン情報とアップデートを確認します" Grid.Column="1">
             <Grid>
-              <TextBlock Text="v2.3.3" Foreground="{ThemeResource TextFillColorSecondaryBrush}" x:Name="VersionText"/>
+              <TextBlock Text="v2.3.3.1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" x:Name="VersionText"/>
               <Ellipse x:Name="UpdateBadge" Width="9" Height="9" Margin="0,-3,-8,0" HorizontalAlignment="Right" VerticalAlignment="Top" Visibility="Collapsed" Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
             </Grid>
           </Button>

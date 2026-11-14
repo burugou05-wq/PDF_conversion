@@ -230,6 +230,17 @@ def test_inspect_pdf_reports_page_count_and_size(tmp_path):
     assert height == pytest.approx(148, abs=0.01)
 
 
+def test_inspect_pdf_rejects_encrypted_pdf(tmp_path):
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=300)
+    writer.encrypt("secret")
+    locked = tmp_path / "locked.pdf"
+    with locked.open("wb") as stream:
+        writer.write(stream)
+    with pytest.raises(ValueError, match="パスワード付きPDF"):
+        inspect_pdf(locked)
+
+
 def test_output_size_is_reported(tmp_path):
     source = create_image(tmp_path / "source.png", (30, 30))
     output = tmp_path / "out.pdf"
